@@ -1,1 +1,2 @@
-# -DoanNgocCuong-BasicTasksLearning_AIENGINEER_PublicCOMMUNITY_20252026
+# BasicTasksLearning_Coding_AIENGINEERING_PrivateCOMMUNITY_20252026
+DỰ ÁN THẬT + DẠY LẠI + COACHING (1-1, 1-2, 1-N) + NETWORKING
