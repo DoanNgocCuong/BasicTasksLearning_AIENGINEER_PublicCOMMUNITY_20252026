@@ -1,7 +1,264 @@
 ### Tóm Tắt Chi Tiết Quy Trình và Kết Quả Dự Án
 
 Tài liệu này ghi lại quá trình cải tiến bài toán phân loại chủ đề bài báo ArXiv, chuyển từ một phương pháp tiếp cận đơn giản sang một hệ thống phân cấp đa nhãn tinh vi hơn. Mục tiêu là xây dựng một mô hình không chỉ dự đoán đúng lĩnh vực mà còn có khả năng nhận diện tính liên ngành của khoa học.
+#### 0. Code đang dùng
+```python
+# ===================================================================
+# PHẦN 0: CÁC THƯ VIỆN CẦN THIẾT
+# ===================================================================
+print("🚀 Đang import các thư viện...")
+# ... (Phần import giữ nguyên như trước) ...
+import pandas as pd
+import numpy as np
+import ast
+from collections import Counter
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MultiLabelBinarizer
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+try:
+    from sentence_transformers import SentenceTransformer
+except ImportError:
+    print("⚠️ Thư viện sentence-transformers chưa được cài đặt. Đang tiến hành cài đặt...")
+    !pip install -U sentence-transformers
+    from sentence_transformers import SentenceTransformer
+    print("✅ Cài đặt sentence-transformers thành công!")
+from sklearn.multiclass import OneVsRestClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier, GradientBoostingClassifier
+from xgboost import XGBClassifier
+from lightgbm import LGBMClassifier
+from sklearn.metrics import f1_score, jaccard_score, classification_report
+import warnings
+warnings.filterwarnings('ignore')
+print("✅ Import thư viện hoàn tất.")
 
+# ===================================================================
+# PHẦN 1: TẢI VÀ CHUẨN BỊ DỮ LIỆU
+# ===================================================================
+print("\n🚀 [Bước 1/5] Tải và chuẩn bị dữ liệu...")
+
+# --- Cấu hình ---
+# Đảm bảo đường dẫn này CHÍNH XÁC
+FILE_PATH = "/content/drive/MyDrive/data/arxiv_perfectly_balanced.csv"
+SAMPLE_SIZE = None # Đặt là một số (ví dụ: 10000) để chạy thử, hoặc None để chạy toàn bộ
+
+df = None # Khởi tạo df là None
+try:
+    df = pd.read_csv(FILE_PATH)
+    print(f"✅ Tải thành công file: '{FILE_PATH}' ({len(df):,} mẫu)")
+
+    if SAMPLE_SIZE and SAMPLE_SIZE < len(df):
+        print(f"   - Lấy mẫu thử nghiệm với {SAMPLE_SIZE:,} dòng.")
+        df = df.sample(n=SAMPLE_SIZE, random_state=42).reset_index(drop=True)
+
+except FileNotFoundError:
+    print(f"❌ LỖI NGHIÊM TRỌNG: Không tìm thấy file tại '{FILE_PATH}'.")
+    print("   - Vui lòng kiểm tra lại đường dẫn và tên file.")
+    # Chạy lệnh ls để giúp debug
+    !ls "/content/drive/MyDrive/AIO25/m04/data/"
+
+# --- Chỉ chạy phần còn lại nếu df được tải thành công ---
+if df is not None:
+    # Chuyển đổi các cột nhãn từ chuỗi về list
+    df['parent_labels'] = df['parent_labels'].apply(ast.literal_eval)
+    df['child_labels'] = df['child_labels'].apply(ast.literal_eval)
+
+    # --- Chuẩn bị dữ liệu cho Tầng 1: Dự đoán Nhãn Cha ---
+    X = df['abstract'].astype(str)
+    y = df['parent_labels']
+
+    # Mã hóa nhãn đa nhãn thành ma trận nhị phân
+    mlb = MultiLabelBinarizer()
+    y_binarized = mlb.fit_transform(y)
+    print(f"✅ Đã mã hóa {len(mlb.classes_)} nhãn cha thành ma trận nhị phân.")
+    print(f"   - Các lớp: {mlb.classes_}")
+
+    # Chia dữ liệu train/test
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y_binarized, test_size=0.2, random_state=42
+    )
+    print(f"✅ Đã chia dữ liệu: {len(X_train):,} train, {len(X_test):,} test.")
+
+    # GIẢI PHÓNG BỘ NHỚ
+    del df
+    import gc
+    gc.collect()
+    print("   - Đã giải phóng bộ nhớ của DataFrame gốc.")
+
+# ===================================================================
+# PHẦN 2: MÃ HÓA VĂN BẢN (FEATURE ENGINEERING) - ĐÃ SỬA LỖI
+# ===================================================================
+print("\n🚀 [Bước 2/5] Mã hóa văn bản (BoW, TF-IDF, Embeddings)...")
+
+# --- 2.1 Bag-of-Words (BoW) ---
+print("\n--- 2.1 Mã hóa bằng Bag-of-Words ---")
+bow_vectorizer = CountVectorizer(max_features=10000, stop_words='english')
+X_train_bow = bow_vectorizer.fit_transform(X_train)
+X_test_bow = bow_vectorizer.transform(X_test)
+print(f"   - Kích thước X_train_bow: {X_train_bow.shape}")
+
+# --- 2.2 TF-IDF ---
+print("\n--- 2.2 Mã hóa bằng TF-IDF ---")
+tfidf_vectorizer = TfidfVectorizer(max_features=10000, stop_words='english')
+X_train_tfidf = tfidf_vectorizer.fit_transform(X_train)
+X_test_tfidf = tfidf_vectorizer.transform(X_test)
+print(f"   - Kích thước X_train_tfidf: {X_train_tfidf.shape}")
+
+
+# --- 2.3 Sentence Embeddings (SỬ DỤNG CLASS MỚI ĐÃ TỐI ƯU) ---
+print("\n--- 2.3 Mã hóa bằng Sentence Embeddings ---")
+
+class EmbeddingVectorizer:
+    """Mã hóa văn bản thành vector embeddings sử dụng SentenceTransformers."""
+    def __init__(self, model_name: str = 'all-MiniLM-L6-v2'):
+        self.model = SentenceTransformer(model_name)
+        self.is_e5_model = 'e5' in model_name.lower()
+
+    # Sửa đổi: Loại bỏ tham số precision khỏi định nghĩa hàm
+    def transform(self, texts: pd.Series, batch_size: int = 64) -> np.ndarray:
+        texts_list = texts.tolist()
+        if self.is_e5_model:
+            print(f"   - Mô hình E5 được phát hiện. Đang thêm tiền tố 'passage: '...")
+            texts_to_encode = [f"passage: {text}" for text in texts_list]
+        else:
+            texts_to_encode = texts_list
+
+        print(f"   - Bắt đầu mã hóa {len(texts_to_encode):,} văn bản với mô hình '{self.model.tokenizer.name_or_path}'...")
+        embeddings = self.model.encode(
+            texts_to_encode,
+            show_progress_bar=True,
+            normalize_embeddings=True,
+            batch_size=batch_size
+            # Không truyền tham số precision nữa
+        )
+        return embeddings
+
+# **LỰA CHỌN MÔ HÌNH EMBEDDING**
+model_name = 'all-MiniLM-L6-v2' # Nhanh, hiệu quả, 384 chiều
+
+embedding_vectorizer = EmbeddingVectorizer(model_name=model_name)
+
+# Sửa đổi: Loại bỏ tham số precision khi gọi hàm
+X_train_embeddings = embedding_vectorizer.transform(X_train, batch_size=128)
+X_test_embeddings = embedding_vectorizer.transform(X_test, batch_size=128)
+
+print("✅ Mã hóa embeddings hoàn tất.")
+print(f"   - Kích thước X_train_embeddings: {X_train_embeddings.shape}")
+
+# ===================================================================
+# PHẦN 3: ĐỊNH NGHĨA CÁC MÔ HÌNH (ĐÃ TỐI ƯU HÓA)
+# ===================================================================
+print("\n🚀 [Bước 3/5] Định nghĩa các mô hình hiệu năng cao...")
+
+# Các mô hình này nhanh và mạnh mẽ
+models_to_train = {
+    'KNN': KNeighborsClassifier(n_jobs=-1),
+    'DecisionTree': DecisionTreeClassifier(random_state=42),
+    'RandomForest': RandomForestClassifier(random_state=42, n_jobs=-1),
+    'XGBoost': OneVsRestClassifier(
+        XGBClassifier(random_state=42, use_label_encoder=False, eval_metric='logloss', n_jobs=-1),
+        n_jobs=-1
+    ),
+    'LightGBM': OneVsRestClassifier(
+        LGBMClassifier(random_state=42, n_jobs=-1),
+        n_jobs=-1
+    ),
+}
+
+print(f"✅ Sẵn sàng huấn luyện {len(models_to_train)} mô hình hiệu năng cao.")
+
+# ===================================================================
+# PHẦN 4: HUẤN LUYỆN VÀ ĐÁNH GIÁ (ĐÃ SỬA LỖI VÀ THÊM SO SÁNH)
+# ===================================================================
+print("\n🚀 [Bước 4/5] Bắt đầu quá trình huấn luyện và đánh giá...")
+
+from sklearn.metrics import accuracy_score
+from tqdm.auto import tqdm
+
+datasets_for_training = {
+    'BoW': (X_train_bow.astype(np.float32), X_test_bow.astype(np.float32)), # ÉP KIỂU Ở ĐÂY
+    'TF-IDF': (X_train_tfidf, X_test_tfidf),
+    'Embeddings': (X_train_embeddings, X_test_embeddings)
+}
+
+results = []
+
+# --- Chuẩn bị dữ liệu để tính Accuracy so sánh ---
+# Lấy nhãn đầu tiên từ y_test đa nhãn
+y_test_single_label = np.array([np.where(row == 1)[0][0] if np.sum(row) > 0 else -1 for row in y_test])
+
+
+total_runs = len(models_to_train) * len(datasets_for_training)
+with tqdm(total=total_runs, desc="Tổng tiến độ huấn luyện") as pbar:
+    for model_name, model in models_to_train.items():
+        for data_name, (X_train_data, X_test_data) in datasets_for_training.items():
+            pbar.set_description(f"Huấn luyện {model_name} với {data_name}")
+            
+            model.fit(X_train_data, y_train)
+            y_pred = model.predict(X_test_data)
+            
+            # --- TÍNH TOÁN CÁC METRICS ---
+            subset_accuracy = accuracy_score(y_test, y_pred)
+            f1 = f1_score(y_test, y_pred, average='samples', zero_division=0)
+            jaccard = jaccard_score(y_test, y_pred, average='samples', zero_division=0)
+
+            # --- TÍNH ACCURACY ĐỂ SO SÁNH ---
+            # Chuyển y_pred đa nhãn thành đơn nhãn (lấy nhãn đầu tiên)
+            y_pred_single_label = np.array([np.where(row == 1)[0][0] if np.sum(row) > 0 else -1 for row in y_pred])
+            # Tính accuracy trên phiên bản đơn nhãn
+            comparative_accuracy = accuracy_score(y_test_single_label, y_pred_single_label)
+            
+            results.append({
+                'Model': model_name,
+                'Encoding': data_name,
+                'Comparative Accuracy': comparative_accuracy, # THÊM CỘT NÀY
+                'Subset Accuracy': subset_accuracy,
+                'F1 Score (Samples)': f1,
+                'Jaccard Score (Samples)': jaccard
+            })
+            
+            print(f"\n--- Kết quả cho: {model_name} với {data_name} ---")
+            print(f"   -> Accuracy (So sánh): {comparative_accuracy:.4f}") # THÊM DÒNG NÀY
+            print(f"   -> Subset Accuracy: {subset_accuracy:.4f}")
+            print(f"   -> F1 Score: {f1:.4f}")
+            print(f"   -> Jaccard Score: {jaccard:.4f}")
+            
+            pbar.update(1)
+
+
+# ===================================================================
+# PHẦN 5: TỔNG KẾT KẾT QUẢ
+# ===================================================================
+print("\n🚀 [Bước 5/5] Tổng kết kết quả...")
+results_df = pd.DataFrame(results)
+# Sắp xếp theo Comparative Accuracy để dễ so sánh nhất
+results_df = results_df.sort_values(by='Comparative Accuracy', ascending=False).reset_index(drop=True)
+print("\n" + "="*120)
+print(" " * 40 + "BẢNG XẾP HẠNG KẾT QUẢ PHÂN LOẠI NHÃN CHA")
+print("="*120)
+print(results_df.to_string())
+print("="*120)
+
+# In ra classification report chi tiết cho mô hình tốt nhất
+if not results_df.empty:
+    best_model_info = results_df.iloc[0]
+    best_model_name = best_model_info['Model']
+    best_encoding_name = best_model_info['Encoding']
+
+    print(f"\n🔍 Phân tích chi tiết cho mô hình tốt nhất: {best_model_name} với {best_encoding_name}")
+    best_model = models_to_train[best_model_name]
+    X_train_best, X_test_best = datasets_for_training[best_encoding_name]
+
+    print("   - Đang huấn luyện lại mô hình tốt nhất để tạo report chi tiết...")
+    best_model.fit(X_train_best, y_train)
+    y_pred_best = best_model.predict(X_test_best)
+
+    report = classification_report(y_test, y_pred_best, target_names=mlb.classes_, zero_division=0)
+    print(report)
+else:
+    print("⚠️ Không có kết quả nào để phân tích.")
+```
 #### 1. So Sánh Cách Tiếp Cận: Cũ vs. Mới
 
 Để hiểu rõ những cải tiến, chúng ta cần so sánh hai phương pháp:
