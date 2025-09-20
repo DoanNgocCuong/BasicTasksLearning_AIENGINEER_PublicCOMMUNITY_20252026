@@ -1,0 +1,61 @@
+[
+  {
+    "text": "student analyzes business data and economic trends",
+    "categories": {
+      "Business": [
+        "Economics",
+        "Finance"
+      ],
+      "Science": [
+        "DataAnalysis"
+      ]
+    }
+  },
+  {
+    "text": "student studies mathematics programming and algorithms",
+    "categories": {
+      "Science": [
+        "Math"
+      ],
+      "Technology": [
+        "Programming",
+        "ComputerScience"
+      ]
+    }
+  },
+  {
+    "text": "student writes poetry and creates digital artwork",
+    "categories": {
+      "Arts": [
+        "Poetry",
+        "Literature"
+      ],
+      "Technology": [
+        "DigitalArt"
+      ]
+    }
+  },
+  {
+    "text": "student researches machine learning and artificial intelligence",
+    "categories": {
+      "Technology": [
+        "AI",
+        "MachineLearning",
+        "Programming"
+      ],
+      "Science": [
+        "Research"
+      ]
+    }
+  },
+  {
+    "text": "student manages startup business and develops strategy",
+    "categories": {
+      "Business": [
+        "Management",
+        "Strategy",
+        "Entrepreneurship"
+      ]
+    }
+  }
+]
