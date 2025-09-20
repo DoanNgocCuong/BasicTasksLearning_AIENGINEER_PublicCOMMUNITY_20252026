@@ -326,3 +326,81 @@ Toàn bộ quá trình huấn luyện 5 mô hình trên 3 loại dữ liệu (t�
 
 **Kết luận:**
 Quy trình tiền xử lý và tạo dataset cân bằng đã thành công. Chúng ta đã xây dựng được một mô hình Tầng 1 mạnh mẽ, có khả năng phân loại đa nhãn hiệu quả, vượt xa khả năng của phương pháp tiếp cận đơn giản ban đầu. Nền tảng này đã sẵn sàng để tiếp tục xây dựng các mô hình Tầng 2 nhằm phân loại chi tiết các nhãn con.
+
+### Tóm Tắt Chi Tiết Quy Trình và Kết Quả Dự Án (Xây dựng đầy đủ 2 tầng)
+
+#### 1. Xây Dựng và Chuẩn Bị Dữ Liệu
+
+Quy trình bắt đầu từ bộ dữ liệu gốc hơn 2.2 triệu bài báo, vốn rất lớn và mất cân bằng. Chúng tôi đã thực hiện các bước sau để tạo ra một tập dữ liệu chất lượng cao cho việc huấn luyện:
+
+1.  **Phân Cấp Nhãn (Cha-Con):**
+    *   **Phương pháp:** Chúng tôi đã phát triển một quy trình tự động để xác định các lĩnh vực khoa học lớn (Nhãn Cha). Bằng cách quét qua 3.8 triệu lượt gán nhãn, chúng tôi trích xuất các tiền tố (prefix) trước dấu `.` hoặc `-` (ví dụ: `math.CO` -> `math`).
+    *   **Lựa chọn:** Chỉ những tiền tố chiếm hơn 0.1% "thị phần" trong tổng số các chủ đề mới được công nhận là Nhãn Cha. Quá trình này đã xác định được **17 Nhãn Cha** chính, tạo ra một cấu trúc phân cấp có ý nghĩa.
+
+2.  **Tạo Dataset Con Cân Bằng (30,000 mẫu):**
+    *   **Mục tiêu:** Tạo ra một bộ dữ liệu nhỏ hơn, dễ quản lý và **ít thiên vị** nhất có thể.
+    *   **Chiến lược:** Chúng tôi đã áp dụng một phương pháp lấy mẫu hai chiều phức tạp để đảm bảo bộ dữ liệu 30,000 mẫu cuối cùng (`arxiv_perfectly_balanced.csv`) đạt được hai mục tiêu cân bằng quan trọng:
+        *   **Cân bằng Cấu trúc:** Tỷ lệ bài báo **đơn nhãn (50.0%)** và **đa nhãn (50.0%)** được giữ ở mức cân bằng hoàn hảo.
+        *   **Cân bằng Lớp:** Sự chênh lệch về số lượng mẫu giữa 17 lớp cha được giảm thiểu đáng kể, giúp mô hình học một cách công bằng hơn.
+
+#### 2. Kiến Trúc Mô Hình Phân Cấp Hai Tầng
+
+Chúng tôi đã xây dựng và huấn luyện một hệ thống gồm hai tầng:
+
+*   **Tầng 1 (Dự đoán Nhãn Cha):**
+    *   **Nhiệm vụ:** Nhận một `abstract` và dự đoán một hoặc nhiều trong số 17 Nhãn Cha.
+    *   **Công nghệ:** Chúng tôi sử dụng mô hình `LightGBM` (bọc trong `OneVsRestClassifier` để xử lý đa nhãn) và mã hóa văn bản bằng `Sentence Embeddings` (mô hình `E5-base`) để tạo ra các vector ngữ nghĩa chất lượng cao.
+
+*   **Tầng 2 (Dự đoán Nhãn Con):**
+    *   **Nhiệm vụ:** Với mỗi Nhãn Cha được dự đoán từ Tầng 1, một mô hình con chuyên biệt sẽ được kích hoạt để dự đoán các Nhãn Con chi tiết.
+    *   **Công nghệ:** Chúng tôi đã huấn luyện **15 mô hình `LightGBM` riêng biệt**, mỗi mô hình là một "chuyên gia" cho một lĩnh vực lớn (ví dụ: một mô hình cho `math`, một cho `cs`, v.v.).
+
+#### 3. Kết Quả Đánh Giá Hiệu Suất
+
+Sau khi huấn luyện, toàn bộ hệ thống đã được đánh giá trên một tập test gồm 5,999 bài báo.
+
+**Kết quả định lượng:**
+
+*   **Hiệu suất Tầng 1 (Nhãn Cha):**
+    *   `Subset Accuracy`: **0.2275** (Đoán đúng hoàn toàn tập hợp nhãn cha trong 22.7% trường hợp).
+    *   `F1 Score (Samples)`: **0.4880** (Trung bình, mô hình đoán đúng khoảng 49% các nhãn cha cho mỗi bài báo).
+
+*   **Hiệu suất Toàn Hệ Thống (Nhãn Con Cuối Cùng):**
+    *   `F1 Score (Samples)`: **0.2572**
+    *   `Jaccard Score`: **0.2157**
+
+**Diễn giải kết quả và Phân tích tại sao hiệu suất còn thấp:**
+
+Kết quả F1-score cuối cùng là **25.7%** cho thấy đây là một baseline ban đầu và còn nhiều không gian để cải thiện. Nguyên nhân chính của hiệu suất còn khiêm tốn này đến từ sự cộng hưởng của nhiều yếu tố:
+
+1.  **Lỗi Khuếch Đại từ Tầng 1:** Tầng 1 là "cửa ngõ" của hệ thống. Với F1-score chỉ 49%, nó thường xuyên dự đoán sai hoặc bỏ sót các nhãn cha. **Nếu Tầng 1 bỏ sót một nhãn cha, Tầng 2 sẽ không bao giờ có cơ hội để dự đoán các nhãn con tương ứng, gây ra lỗi dây chuyền.** Đây là điểm yếu lớn nhất của hệ thống hiện tại.
+
+2.  **Độ Khó Cố Hữu của Bài Toán:** Việc phân loại chi tiết hàng trăm nhãn con khác nhau, đặc biệt là trong các lĩnh vực có sự chồng chéo lớn về ngôn ngữ (ví dụ: `hep-th` và `math-ph`), là một nhiệm vụ cực kỳ khó khăn.
+
+3.  **Hiệu suất của các Mô hình Con (Tầng 2):** Mỗi mô hình con được huấn luyện trên một tập dữ liệu nhỏ hơn và có thể chưa được tối ưu hóa. Một số mô hình con có thể hoạt động rất kém, kéo hiệu suất chung đi xuống.
+
+#### 4. Phân Tích Ví Dụ Dự Đoán Thực Tế
+
+Để hiểu rõ hơn về hành vi của mô hình, hãy xem xét một vài ví dụ từ tập test:
+
+*   **Ví dụ 1 (Thành công một phần, thất bại ở Tầng 2):**
+    *   **Abstract:** Về "adaptive quantum circuits", "symmetry-breaking order", "gapless, local Hamiltonian".
+    *   **Nhãn thật (Con):** `['cond-mat.stat-mech', 'quant-ph']`
+    *   **Dự đoán Tầng 1:** `['cond-mat', 'quant']` -> **ĐÚNG HOÀN TOÀN!**
+    *   **Dự đoán Tầng 2:** `[]` (trống) -> **SAI!**
+    *   **Phân tích:** Tầng 1 đã hoạt động xuất sắc khi nhận diện đúng cả hai lĩnh vực. Tuy nhiên, các mô hình con của `cond-mat` và `quant` đã không đủ mạnh để xác định các chủ đề chi tiết.
+
+*   **Ví dụ 2 (Thất bại ở Tầng 1 - Bỏ sót):**
+    *   **Abstract:** Về "cellular networks", "full-duplex", "beamforming", "multi-cell network capacity".
+    *   **Nhãn thật (Cha):** `['cs', 'eess', 'math']`
+    *   **Dự đoán Tầng 1:** `['eess']` -> **SAI (thiếu)**. Mô hình chỉ nhận ra được khía cạnh Kỹ thuật Điện (`eess`) mà bỏ qua hoàn toàn khía cạnh Khoa học Máy tính (`cs`) và Toán học (`math`).
+    *   **Phân tích:** Đây là lỗi phổ biến nhất. Do Tầng 1 bỏ sót `cs` và `math`, các mô hình con tương ứng không được kích hoạt, dẫn đến việc các nhãn con `cs.IT`, `cs.NI`, `math.IT` cũng bị bỏ lỡ.
+
+*   **Ví dụ 3 (Thất bại ở Tầng 1 - Nhầm lẫn):**
+    *   **Abstract:** Về "copositivity", "scalar potentials", "Higgs boson", "two Higgs doublet model".
+    *   **Nhãn thật (Cha):** `['hep']`
+    *   **Dự đoán Tầng 1:** `['gr', 'hep', 'patt-sol']` -> **SAI (thừa)**. Mô hình đã đoán đúng `hep` nhưng lại "ảo giác" ra cả Hấp dẫn Lượng tử (`gr`) và một nhãn không liên quan.
+    *   **Phân tích:** Mô hình vẫn còn nhầm lẫn giữa các lĩnh vực có từ vựng tương tự nhau.
+
+**Kết luận chung:**
+Hệ thống phân cấp hai tầng hiện tại đã được xây dựng thành công và cho thấy tiềm năng trong việc xử lý bài toán phức tạp. Tuy nhiên, hiệu suất hiện tại còn hạn chế, chủ yếu do độ chính xác chưa cao của mô hình Tầng 1. Các bước cải thiện trong tương lai nên tập trung vào việc **tối ưu hóa mạnh mẽ mô hình dự đoán nhãn cha** để tạo ra một nền tảng vững chắc hơn cho Tầng 2 hoạt động.
