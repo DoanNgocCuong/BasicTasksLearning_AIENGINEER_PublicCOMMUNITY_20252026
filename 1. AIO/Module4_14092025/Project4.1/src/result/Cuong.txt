@@ -1,0 +1,66 @@
+Predicted categories: {}
+⌂61.73 θ78° [ubuntu@mgc-dev2-3090:~/cuong_dn/xongxoa/codeCuong] <venv> $ python main.py
+Testing Optimized Hierarchical Text Classifier with data.json
+============================================================
+Arguments: samples=None, test_samples=5, max_features=10000, threshold=0.2
+Data file: data.json
+Loading data from: data.json
+Loaded 29994 records
+Successfully converted 29994 records
+
+Splitting data into train/test sets...
+Train samples: 23995
+Test samples: 5999
+
+Training classifier on 23995 samples...
+Training on 23995 samples...
+Training parent classifier...
+Parent classifier trained on 21595 samples with 33 parent classes
+Training child classifier...
+Child classifier trained on 21595 samples with 172 child classes
+Training completed!
+
+Testing on 5 sample(s) from test set...
+
+Evaluating on FULL test set (5999 samples)...
+
+Results:
+Your Approach:
+  f1_macro_parent: 0.11554864531218795
+  f1_macro_per_parent: {'cond-mat': 0.13158294180010993, 'q-bio': 0.1972802065080905, 'hep': 0.19382483738074308, 'nucl': 0.256611779740735, 'q-fin': 0.32932408365981836, 'cs': 0.1358824798513082, 'astro-ph': 0.24725711565612227, 'nlin': 0.20495683733684036, 'math': 0.10881149253645757, 'astro': 0.24104979133695512, 'gr': 0.296724966553232, 'eess': 0.2770149117127178, 'quant': 0.16700532696738146, 'econ': 0.29687040347242966, 'stat': 0.15595540902528673, 'physics': 0.10046821055399238, 'cond': 0.11876362880815407, 'alg-geom': 0.49995832291406184, 'adap-org': 0.5709279038718291, 'chao-dyn': 0.4446161542414525, 'cmp-lg': 0.49995832291406184, 'patt-sol': 0.49966638865721436, 'q-alg': 0.49983324995831246, 'chem-ph': 0.49983324995831246, 'funct-an': 0.49987494789495623, 'solv-int': 0.5228858919352354, 'supr-con': 0.4995829162495829, 'mtrl-th': 0.49966638865721436, 'atom-ph': 0.49987494789495623, 'dg-ga': 0.49995832291406184, 'comp-gas': 0.49995832291406184, 'plasm-ph': 1.0, 'bayes-an': 1.0}
+  f1_macro_children_overall: 0.3786660531477481
+
+HiClass Approach:
+  hierarchical_precision: 0.10530690975711132
+  hierarchical_recall: 0.9251276233692569
+  hierarchical_f1: 0.18908980243970477
+
+Sample predictions (showing first 5):
+
+Sample 1:
+Text: Optimization of Lattice Boltzmann Simulations on Heterogeneous Computers   High-performance computin...
+True categories: {'cs': ['cs.DC']}
+Predicted categories: {'cond': ['cond-mat', 'cond-mat.stat-mech'], 'cond-mat': ['cond-mat', 'cond-mat.dis-nn', 'cond-mat.stat-mech'], 'cs': ['cs.IT', 'cs.LG', 'cs.SY'], 'eess': ['eess.SY'], 'hep': ['hep-lat'], 'math': ['math.IT', 'math.OC'], 'nlin': ['nlin.AO', 'nlin.CD'], 'nucl': ['nucl-th'], 'physics': ['physics.comp-ph', 'physics.data-an', 'physics.flu-dyn', 'physics.soc-ph'], 'q-fin': ['q-fin.EC'], 'quant': ['quant-ph'], 'stat': ['stat.ML']}
+
+Sample 2:
+Text: Demographic inference using genetic data from a single individual:
+  separating population size vari...
+True categories: {'q-bio': ['q-bio.PE'], 'stat': ['stat.AP']}
+Predicted categories: {'cond-mat': ['cond-mat.dis-nn', 'cond-mat.stat-mech'], 'cs': ['cs.IT', 'cs.LG', 'cs.SY'], 'econ': ['econ.EM', 'econ.GN'], 'eess': ['eess.SP', 'eess.SY'], 'math': ['math.IT', 'math.ST'], 'physics': ['physics.comp-ph', 'physics.data-an', 'physics.soc-ph'], 'q-bio': ['q-bio.GN', 'q-bio.PE', 'q-bio.QM'], 'q-fin': ['q-fin.EC'], 'quant': ['quant-ph'], 'stat': ['stat.AP', 'stat.ME', 'stat.ML', 'stat.TH']}
+
+Sample 3:
+Text: Preventing dataset shift from breaking machine-learning biomarkers   Machine learning brings the hop...
+True categories: {'cs': ['cs.LG'], 'math': ['math.ST'], 'q-bio': ['q-bio.QM'], 'stat': ['stat.TH']}
+Predicted categories: {'astro': ['astro-ph.IM'], 'astro-ph': ['astro-ph.IM'], 'cond': ['cond-mat', 'cond-mat.stat-mech'], 'cond-mat': ['cond-mat', 'cond-mat.dis-nn', 'cond-mat.stat-mech'], 'cs': ['cs.AI', 'cs.CV', 'cs.CY', 'cs.GT', 'cs.LG'], 'econ': ['econ.GN'], 'eess': ['eess.SY'], 'gr': ['gr-qc'], 'hep': ['hep-ph', 'hep-th'], 'math': ['math-ph', 'math.DS', 'math.MP', 'math.OC'], 'nlin': ['nlin.AO', 'nlin.SI'], 'nucl': ['nucl-th'], 'physics': ['physics.comp-ph', 'physics.data-an', 'physics.ins-det', 'physics.soc-ph'], 'q-bio': ['q-bio.PE', 'q-bio.QM'], 'q-fin': ['q-fin.EC'], 'quant': ['quant-ph'], 'stat': ['stat.ML']}
+
+Sample 4:
+Text: Composite Consensus-Building Process: Permissible Meeting Analysis and
+  Compromise Choice Explorati...
+True categories: {'cs': ['cs.GT'], 'econ': ['econ.TH']}
+Predicted categories: {'astro': ['astro-ph.IM'], 'astro-ph': ['astro-ph.IM'], 'cond': ['cond-mat', 'cond-mat.stat-mech'], 'cond-mat': ['cond-mat', 'cond-mat.stat-mech'], 'cs': ['cs.LG', 'cs.SY'], 'econ': ['econ.GN'], 'eess': ['eess.IV', 'eess.SY'], 'gr': ['gr-qc'], 'hep': ['hep-ph', 'hep-th'], 'math': ['math-ph', 'math.DS', 'math.MP'], 'nlin': ['nlin.AO'], 'nucl': ['nucl-th'], 'physics': ['physics.comp-ph', 'physics.soc-ph'], 'q-bio': ['q-bio.PE'], 'q-fin': ['q-fin.EC'], 'quant': ['quant-ph'], 'stat': ['stat.ML']}
+
+Sample 5:
+Text: An algebraic method of classification of S-integrable discrete models   A method of classification o...
+True categories: {'nlin': ['nlin.SI']}
+Predicted categories: {'cond': ['cond-mat', 'cond-mat.stat-mech'], 'cond-mat': ['cond-mat', 'cond-mat.dis-nn', 'cond-mat.stat-mech'], 'cs': ['cs.LG'], 'eess': ['eess.SY'], 'gr': ['gr-qc'], 'hep': ['hep-th'], 'math': ['math-ph', 'math.MP', 'math.NA', 'math.OC'], 'nlin': ['nlin.AO', 'nlin.PS', 'nlin.SI'], 'nucl': ['nucl-th'], 'physics': ['physics.comp-ph', 'physics.data-an'], 'quant': ['quant-ph']}
+θ62° [ubuntu@mgc-dev2-3090:~/cuong_dn/xongxoa/codeCuong] <venv> $ 

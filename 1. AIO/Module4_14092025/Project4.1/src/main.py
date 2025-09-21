@@ -1,183 +1,158 @@
-import argparse
+#!/usr/bin/env python3
+# Test script for the optimized classifier using data.json
+
 import json
-from pathlib import Path
-from typing import List, Dict, Any
+import os
+import argparse
+from sklearn.model_selection import train_test_split
+from optimized_hierarchical_classifier import HierarchicalTextClassifier
 
-from multilabel_hierarchical_classifier import MultiLabelHierarchicalClassifier
-
-
-def records_to_nested_format(records: List[Dict[str, Any]],
-                             text_source: str = "title+abstract",
-                             categories_field: str = "json_categories") -> List[Dict[str, Any]]:
-    """
-    Convert list of records (as in data.json) into the nested format required by
-    MultiLabelHierarchicalClassifier: {"text": str, "categories": {parent: [children]}}
-
-    Expected input example for each record:
-    {
-      "authors": "...",
-      "title": "...",
-      "abstract": "...",
-      "json_categories": "{\"hep\": [\"hep-th\"]}"
-    }
-
-    Args:
-        records: List of dicts loaded from data.json
-        text_source: one of {"title", "abstract", "title+abstract"}
-        categories_field: field name that holds a JSON-string or dict mapping parent->list(children)
-
-    Returns:
-        List of items in nested format.
-    """
-    nested: List[Dict[str, Any]] = []
-
-    for rec in records:
-        # Build text
-        title = (rec.get("title") or "").strip()
-        abstract = (rec.get("abstract") or "").strip()
-        if text_source == "title":
-            text = title
-        elif text_source == "abstract":
-            text = abstract
-        else:  # "title+abstract"
-            text = (title + "\n" + abstract).strip()
-
-        # Parse categories
-        cats_raw = rec.get(categories_field, {})
-        if isinstance(cats_raw, str):
-            cats_raw = cats_raw.strip()
-            if cats_raw:
-                try:
-                    categories = json.loads(cats_raw)
-                except json.JSONDecodeError:
-                    # If it's not valid JSON, fallback to empty
-                    categories = {}
-            else:
-                categories = {}
-        elif isinstance(cats_raw, dict):
-            categories = cats_raw
-        else:
-            categories = {}
-
-        # Ensure categories is dict of parent -> list(children)
-        categories = {str(k): list(v) for k, v in categories.items() if isinstance(v, (list, tuple))}
-
-        nested.append({
+def load_data_json(file_path):
+    """Load and convert data.json to the expected format"""
+    print(f"Loading data from: {file_path}")
+    
+    with open(file_path, 'r', encoding='utf-8') as f:
+        raw_data = json.load(f)
+    
+    print(f"Loaded {len(raw_data)} records")
+    
+    # Convert to expected format
+    converted_data = []
+    for item in raw_data:
+        # Combine title and abstract as text
+        text = f"{item.get('title', '')} {item.get('abstract', '')}"
+        
+        # Parse json_categories
+        categories_str = item.get('json_categories', '{}')
+        try:
+            categories = json.loads(categories_str)
+        except json.JSONDecodeError:
+            print(f"Warning: Could not parse categories for item: {item.get('title', 'Unknown')[:50]}...")
+            continue
+        
+        converted_data.append({
             "text": text,
             "categories": categories
         })
+    
+    print(f"Successfully converted {len(converted_data)} records")
+    return converted_data
 
-    return nested
-
-
-def cmd_train(args: argparse.Namespace) -> None:
-    data_path = Path(args.data)
-    if not data_path.exists():
-        raise FileNotFoundError(f"Data file not found: {data_path}")
-
-    with data_path.open("r", encoding="utf-8") as f:
-        records = json.load(f)
-
-    data_nested = records_to_nested_format(records,
-                                           text_source=args.text_source,
-                                           categories_field=args.categories_field)
-
-    clf = MultiLabelHierarchicalClassifier(
-        max_features=args.max_features,
-        ngram_range=(1, args.ngram_max),
-        random_state=args.random_state,
-    )
-
-    clf.fit(data_nested, validation_split=args.validation_split)
-
-    model_path = Path(args.model_out)
-    clf.save(str(model_path))
-
-    print("\n✅ Training done.")
-    print(f"💾 Model saved to: {model_path}")
-
-
-def cmd_predict(args: argparse.Namespace) -> None:
-    model_path = Path(args.model)
-    if not model_path.exists():
-        raise FileNotFoundError(f"Model file not found: {model_path}")
-
-    clf = MultiLabelHierarchicalClassifier.load(str(model_path))
-
-    texts: List[str] = []
-    if args.text:
-        texts.append(args.text)
-    if args.text_file:
-        tf = Path(args.text_file)
-        if not tf.exists():
-            raise FileNotFoundError(f"Text file not found: {tf}")
-        with tf.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    texts.append(line)
-
-    if not texts:
-        raise ValueError("No input text provided. Use --text or --text-file.")
-
-    if args.with_details:
-        results = clf.predict_with_probabilities(texts)
-        print(json.dumps(results, indent=2, ensure_ascii=False))
-    else:
-        preds = clf.predict(texts, method=args.method)
-        out = []
-        for t, p in zip(texts, preds):
-            out.append({"text": t, "categories": p})
-        print(json.dumps(out, indent=2, ensure_ascii=False))
-
-
-def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Multi-Label Hierarchical Text Classifier - Train & Predict",
-    )
-
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    # Train subcommand
-    p_train = subparsers.add_parser("train", help="Train model from data.json")
-    p_train.add_argument("--data", type=str, default="data.json",
-                         help="Path to input JSON records (exported from notebook)")
-    p_train.add_argument("--model-out", type=str, default="nested_model.pkl",
-                         help="Path to save trained model")
-    p_train.add_argument("--text-source", type=str, choices=["title", "abstract", "title+abstract"],
-                         default="title+abstract", help="Which fields compose the training text")
-    p_train.add_argument("--categories-field", type=str, default="json_categories",
-                         help="Field name that contains the nested categories JSON")
-    p_train.add_argument("--max-features", type=int, default=5000,
-                         help="Max TF-IDF features")
-    p_train.add_argument("--ngram-max", type=int, default=2,
-                         help="Max n-gram size (1..N)")
-    p_train.add_argument("--validation-split", type=float, default=0.2,
-                         help="Validation split ratio [0..1]")
-    p_train.add_argument("--random-state", type=int, default=42,
-                         help="Random seed")
-    p_train.set_defaults(func=cmd_train)
-
-    # Predict subcommand
-    p_pred = subparsers.add_parser("predict", help="Predict with a saved model")
-    p_pred.add_argument("--model", type=str, default="nested_model.pkl",
-                        help="Path to saved model")
-    p_pred.add_argument("--text", type=str, help="Single text to classify")
-    p_pred.add_argument("--text-file", type=str, help="Path to a text file (one text per line)")
-    p_pred.add_argument("--method", type=str, choices=["hierarchical", "independent"],
-                        default="hierarchical", help="Prediction method")
-    p_pred.add_argument("--with-details", action="store_true",
-                        help="Output detailed probabilities as well")
-    p_pred.set_defaults(func=cmd_predict)
-
-    return parser
-
+def parse_arguments():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(description='Test Hierarchical Text Classifier with data.json')
+    parser.add_argument('--samples', '-s', type=int, default=None, 
+                       help='Number of samples to use for training (default: use all)')
+    parser.add_argument('--test-samples', '-t', type=int, default=5,
+                       help='Number of samples to use for testing (default: 5, use -1 for all test data)')
+    parser.add_argument('--max-features', '-f', type=int, default=10000,
+                       help='Maximum number of features for TF-IDF (default: 10000)')
+    parser.add_argument('--data-file', '-d', type=str, default='data.json',
+                       help='Path to data.json file (default: data.json)')
+    parser.add_argument('--threshold', type=float, default=0.2,
+                       help='Probability threshold for predictions (default: 0.2)')
+    return parser.parse_args()
 
 def main():
-    parser = build_arg_parser()
-    args = parser.parse_args()
-    args.func(args)
+    # Parse command line arguments
+    args = parse_arguments()
+    
+    print("Testing Optimized Hierarchical Text Classifier with data.json")
+    print("=" * 60)
+    print(f"Arguments: samples={args.samples}, test_samples={args.test_samples}, max_features={args.max_features}, threshold={args.threshold}")
+    print(f"Data file: {args.data_file}")
 
+    # Load data from JSON file
+    if not os.path.exists(args.data_file):
+        print(f"Error: {args.data_file} not found in current directory")
+        return
+    
+    try:
+        data = load_data_json(args.data_file)
+    except Exception as e:
+        print(f"Error loading data: {e}")
+        return
+    
+    if len(data) == 0:
+        print("No valid data found")
+        return
+    
+    # Limit samples if specified
+    if args.samples is not None:
+        if args.samples > len(data):
+            print(f"Warning: Requested {args.samples} samples but only {len(data)} available. Using all {len(data)} samples.")
+            data = data
+        else:
+            data = data[:args.samples]
+            print(f"Using {len(data)} samples as requested")
+    
+    # Split data into train and test sets
+    print(f"\nSplitting data into train/test sets...")
+    train_data, test_data = train_test_split(data, test_size=0.2, random_state=42)
+    print(f"Train samples: {len(train_data)}")
+    print(f"Test samples: {len(test_data)}")
+    
+    # Initialize classifier
+    classifier = HierarchicalTextClassifier(max_features=args.max_features, random_state=42)
+    
+    print(f"\nTraining classifier on {len(train_data)} samples...")
+    
+    # Train on train data only
+    classifier.fit(train_data)
+    
+    print("Training completed!")
+    
+    # Test on test data (use all test data or limit to specified number)
+    if args.test_samples == -1:  # Use all test data
+        test_samples = test_data
+        print(f"\nTesting on ALL {len(test_samples)} samples from test set...")
+    else:
+        test_count = min(args.test_samples, len(test_data))
+        test_samples = test_data[:test_count]
+        print(f"\nTesting on {test_count} sample(s) from test set...")
+    
+    # Always evaluate on FULL test set for accurate metrics
+    print(f"\nEvaluating on FULL test set ({len(test_data)} samples)...")
+    results = classifier.compare_approaches(test_data, threshold=args.threshold)
+    
+    print("\nResults:")
+    print("Your Approach:")
+    for key, value in results['your_approach'].items():
+        print(f"  {key}: {value}")
+    
+    print("\nHiClass Approach:")
+    for key, value in results['hiclass_approach'].items():
+        print(f"  {key}: {value}")
+    
+    # Show some predictions (limit to first 5 for readability)
+    show_count = min(5, len(test_samples))
+    print(f"\nSample predictions (showing first {show_count}):")
+    test_texts = [item['text'][:100] + "..." for item in test_samples[:show_count]]
+    predictions = classifier.predict([item['text'] for item in test_samples[:show_count]], threshold=args.threshold)
+    
+    for i, (text, pred, true) in enumerate(zip(test_texts, predictions, test_samples[:show_count])):
+        print(f"\nSample {i+1}:")
+        print(f"Text: {text}")
+        print(f"True categories: {true['categories']}")
+        print(f"Predicted categories: {pred}")
 
 if __name__ == "__main__":
     main()
+    
+"""    
+# Use all samples (default behavior)
+python main.py
+
+# Use only 1000 samples for training
+python main.py --samples 1000
+
+# Use 500 samples for training and 10 for testing
+python main.py -s 500 -t 10
+
+# Use 2000 samples with 5000 max features
+python main.py -s 2000 -f 5000
+
+# Use different data file
+python main.py -d my_data.json -s 1000
+
+"""

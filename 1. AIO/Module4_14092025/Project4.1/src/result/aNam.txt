@@ -1,0 +1,17 @@
+----------------------------------------
+📊 TẦNG 1 (NHÃN CHA)
+   - 🔮 DỰ ĐOÁN: ['cond-mat', 'quant']
+   - ✅ NHÃN THẬT:  ['cond-mat', 'quant']
+   - 👉 KẾT QUẢ: ĐÚNG
+----------------------------------------
+🔬 TẦNG 2 (NHÃN CON)
+   - 🔮 DỰ ĐOÁN: ['cond-mat.stat-mech', 'cond-mat.str-el']
+   - ✅ NHÃN THẬT:  ['cond-mat.stat-mech', 'quant-ph']
+   - 👉 KẾT QUẢ: SAI
+----------------------------------------
+
+🎉 Hoàn tất! 🎉
+⌂114.48 θ73° [ubuntu@mgc-dev2-3090:~/cuong_dn/xongxoa/codeANamProject4.1] $ ^C
+θ65° [ubuntu@mgc-dev2-3090:~/cuong_dn/xongxoa/codeANamProject4.1] $ ^C
+θ62° [ubuntu@mgc-dev2-3090:~/cuong_dn/xongxoa/codeANamProject4.1] $ ^C
+θ62° [ubuntu@mgc-dev2-3090:~/cuong_dn/xongxoa/codeANamProject4.1] $ 
