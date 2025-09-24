@@ -1,406 +1,810 @@
-### Tóm Tắt Chi Tiết Quy Trình và Kết Quả Dự Án
+# Ref:
+- https://aistudio.google.com/prompts/1Wx081g1dLhv2yotR0LhVG0D2Cji1t2pM
 
-Tài liệu này ghi lại quá trình cải tiến bài toán phân loại chủ đề bài báo ArXiv, chuyển từ một phương pháp tiếp cận đơn giản sang một hệ thống phân cấp đa nhãn tinh vi hơn. Mục tiêu là xây dựng một mô hình không chỉ dự đoán đúng lĩnh vực mà còn có khả năng nhận diện tính liên ngành của khoa học.
-#### 0. Code đang dùng
+# Version 1
+## **1. Mục Tiêu**
+
+Mục tiêu của Version 1.0 là xây dựng và đánh giá một mô hình baseline đầu tiên cho bài toán phân loại chủ đề bài báo khoa học trên bộ dữ liệu ArXiv đã qua tiền xử lý. Các mục tiêu cụ thể bao gồm:
+-   Xác thực tính hiệu quả của bộ dữ liệu `arxiv_perfectly_balanced.csv`.
+-   Triển khai kiến trúc phân loại phân cấp hai tầng (Hierarchical Classification).
+-   Sử dụng các mô hình học máy cổ điển (TF-IDF + LightGBM) để thiết lập một ngưỡng hiệu suất (baseline) có thể đo lường được.
+-   Đánh giá chi tiết hiệu suất của mô hình ở cả hai tầng và phân tích các điểm cần cải thiện.
+
+## **2. Kiến Trúc & Phương Pháp Thực Hiện**
+
+Kiến trúc tổng thể được xây dựng theo một pipeline gồm 3 giai đoạn chính: Trích xuất Đặc trưng, Huấn luyện Mô hình Phân cấp, và Quy trình Dự đoán.
+
+### **2.1. Trích Xuất Đặc Trưng (Feature Extraction)**
+
+-   **Phương pháp:** Term Frequency-Inverse Document Frequency (TF-IDF).
+-   **Chi tiết:**
+    -   Sử dụng `TfidfVectorizer` của Scikit-learn.
+    -   Giới hạn số lượng đặc trưng ở `max_features=5000` từ phổ biến nhất để cân bằng giữa hiệu suất và tốc độ tính toán.
+    -   Loại bỏ các từ dừng (stop words) tiếng Anh.
+-   **Kết quả:** Mỗi abstract được biểu diễn bằng một vector thưa (sparse vector) 5000 chiều.
+
+### **2.2. Kiến Trúc Mô Hình Phân Cấp Hai Tầng**
+
+Để xử lý cấu trúc cha-con của nhãn, chúng tôi đã triển khai một hệ thống gồm hai tầng mô hình:
+
+#### **Tầng 1: Parent Classifier (Bộ phân loại Nhãn Cha)**
+-   **Nhiệm vụ:** Dự đoán một hoặc nhiều trong số 17 nhãn cha chính (vd: `cs`, `math`, `hep`) từ abstract của bài báo.
+-   **Mô hình:** `OneVsRestClassifier` kết hợp với `LGBMClassifier`.
+-   **Xử lý Mất cân bằng:** Tham số `class_weight='balanced'` được kích hoạt trong `LGBMClassifier`. Đây là một bước cực kỳ quan trọng, giúp thuật toán tự động tăng trọng số cho các lớp cha thiểu số (`econ`, `cond`), buộc mô hình phải học chúng một cách công bằng.
+
+#### **Tầng 2: Child Classifiers (Các bộ phân loại Nhãn Con)**
+-   **Nhiệm vụ:** Với mỗi nhãn cha được dự đoán ở Tầng 1, một mô hình chuyên biệt ở Tầng 2 sẽ được kích hoạt để dự đoán các nhãn con cụ thể thuộc nhãn cha đó.
+-   **Kiến trúc:** Một tập hợp gồm **15 mô hình con**, mỗi mô hình tương ứng với một nhãn cha có đủ dữ liệu để huấn luyện.
+    -   *Ví dụ:* Nếu Tầng 1 dự đoán là `cs`, mô hình `cs_classifier` của Tầng 2 sẽ được dùng để dự đoán các nhãn con như `cs.AI`, `cs.CV`, `cs.LG`,...
+-   **Mô hình:** Mỗi bộ phân loại con cũng là một `OneVsRestClassifier` với `LGBMClassifier`, cũng sử dụng `class_weight='balanced'`.
+
+### **2.3. Quy Trình Huấn Luyện & Dự Đoán**
+
+1.  **Huấn luyện:**
+    -   Huấn luyện mô hình Tầng 1 trên toàn bộ tập train (23,995 mẫu) với 17 nhãn cha.
+    -   Với mỗi nhãn cha, lọc ra các mẫu trong tập train thuộc về nhãn cha đó và huấn luyện một mô hình Tầng 2 tương ứng.
+2.  **Dự đoán (trên tập test):**
+    -   **Bước 1:** Đưa abstract vào mô hình Tầng 1 để nhận về các nhãn cha dự đoán (ví dụ: `['cs', 'math']`).
+    -   **Bước 2:** Với mỗi nhãn cha dự đoán được, kích hoạt mô hình Tầng 2 tương ứng.
+        -   `cs_classifier` sẽ dự đoán các nhãn con của `cs`.
+        -   `math_classifier` sẽ dự đoán các nhãn con của `math`.
+    -   **Bước 3:** Gộp tất cả các nhãn con dự đoán được từ các mô hình Tầng 2 để ra kết quả cuối cùng.
+
+## **3. Kết Quả Thử Nghiệm (Version 1.0)**
+
+| Tầng Đánh Giá | Metric | Giá Trị | Ghi Chú |
+| :--- | :--- | :--- | :--- |
+| **Tầng 1 (Nhãn Cha)** | **F1-Score (Weighted Avg)** | **0.6483** | **Metric chính**, phản ánh hiệu suất tổng thể có trọng số. |
+| | F1-Score (Macro Avg) | 0.6474 | Cho thấy mô hình hoạt động tốt trên cả lớp đa số và thiểu số. |
+| | F1-Score (Samples Avg) | 0.6396 | Hiệu suất trung bình trên từng mẫu, hữu ích cho đa nhãn. |
+| **Toàn Hệ Thống (Nhãn Con)** | **F1-Score (Weighted Avg)** | **0.4047** | Phản ánh hiệu suất dự đoán nhãn con cuối cùng. |
+| | F1-Score (Samples Avg) | 0.4142 | |
+| | F1-Score (Macro Avg) | 0.2543 | **Rất thấp**, cho thấy mô hình cực kỳ khó khăn với các lớp con hiếm. |
+
+## **4. Phân Tích & Đánh Giá**
+
+### **4.1. Điểm Tích Cực**
+
+-   **Chiến lược dữ liệu được xác thực:** Việc F1-macro và F1-weighted ở Tầng 1 gần như bằng nhau (chênh lệch chỉ 0.0009) khẳng định rằng chiến lược **cân bằng đơn/đa nhãn** kết hợp với `class_weight='balanced'` là hoàn toàn đúng đắn. Mô hình không bị thiên vị nặng về các lớp cha đa số.
+-   **Thiết lập Baseline thành công:** Mô hình đã cung cấp một ngưỡng hiệu suất rõ ràng (F1 ~0.65 cho nhãn cha, ~0.40 cho nhãn con) để các phiên bản tương lai có thể so sánh và cải thiện.
+
+### **4.2. Hạn Chế & Nguyên Nhân Hiệu Suất**
+
+Kết quả hiện tại là một baseline tốt, nhưng chưa cao. Nguyên nhân không nằm ở khâu chuẩn bị dữ liệu mà đến từ các yếu tố sau:
+
+1.  **Sụt giảm hiệu suất từ Tầng 1 -> Tầng 2:** F1-weighted giảm từ **0.65 xuống 0.40**. Đặc biệt, F1-macro giảm mạnh từ **0.65 xuống 0.25**, cho thấy nút thắt cổ chai nằm ở việc dự đoán các nhãn con. Đây là bài toán phân loại chi tiết (fine-grained) với hàng trăm lớp con, trong đó rất nhiều lớp có số lượng mẫu cực kỳ ít (vấn đề đuôi dài - long-tail problem), khiến mô hình không đủ dữ liệu để học.
+
+2.  **Điểm mù ngữ nghĩa của TF-IDF:** `TF-IDF` chỉ đếm từ, không hiểu nghĩa. Nó không nhận ra rằng "machine learning" và "deep learning" có liên quan đến nhau. Đây là hạn chế lớn nhất về mặt trích xuất đặc trưng, ngăn mô hình "hiểu" sâu hơn về nội dung abstract.
+
+3.  **Mô hình Baseline chưa được tinh chỉnh:** Các tham số của LightGBM (`n_estimators=100`) và TF-IDF (`max_features=5000`) đang ở mức cơ bản để chạy nhanh. Chúng chưa được tối ưu để đạt hiệu suất cao nhất.
+
+## **5. Hướng Cải Thiện cho Version 2.0**
+
+Nền tảng dữ liệu đã vững chắc. Lộ trình cải thiện cho phiên bản tiếp theo sẽ tập trung vào việc nâng cấp mô hình.
+
+-   **Ưu tiên #1 (Tác động lớn nhất): Nâng cấp Feature Extraction.**
+    -   **Thử nghiệm:** Thay thế TF-IDF bằng các mô hình nhúng từ có khả năng hiểu ngữ nghĩa như **SciBERT**. Đây là một mô hình Transformer đã được huấn luyện trước trên một kho văn bản khoa học khổng lồ, hứa hẹn sẽ mang lại sự cải thiện đột phá.
+
+-   **Ưu tiên #2: Tinh chỉnh siêu tham số (Hyperparameter Tuning).**
+    -   **Thử nghiệm:** Sử dụng các thư viện như Optuna hoặc Hyperopt để tự động tìm ra bộ tham số tốt nhất cho `LGBMClassifier` (ví dụ: `n_estimators`, `learning_rate`, `num_leaves`, ...).
+
+-   **Ưu tiên #3 (Tùy chọn): Tối ưu hóa ngưỡng quyết định.**
+    -   **Thử nghiệm:** Sau khi có dự đoán xác suất, tìm một ngưỡng quyết định (threshold) tối ưu cho mỗi nhãn thay vì dùng mặc định 0.5 để tối đa hóa F1-score.
+
+## **6. Kết Luận Chung**
+
+Version 1.0 đã thành công trong việc xây dựng một pipeline hoàn chỉnh và thiết lập một baseline hiệu suất đáng tin cậy. Phân tích đã chỉ ra rằng chiến lược chuẩn bị dữ liệu là đúng đắn và các điểm nghẽn về hiệu suất nằm ở khả năng trích xuất đặc trưng và sự tinh chỉnh của mô hình. Các bước tiếp theo sẽ tập trung vào việc giải quyết các điểm nghẽn này.
+
+# Version 2
+## Script:
 ```python
+# ===================================================================
+#                      VERSION 2.2: SPACY + FASTTEXT + OPTUNA
+# ===================================================================
+# Script này thay thế hoàn toàn NLTK bằng spaCy để giải quyết triệt để
+# lỗi LookupError, trong khi vẫn giữ nguyên các cải tiến về ngữ nghĩa
+# (FastText) và tối ưu hóa (Optuna).
+# ===================================================================
+
+# ### BƯỚC 0: CÀI ĐẶT CẦN THIẾT ###
+# Chạy ô này TRƯỚC TIÊN trong Colab để cài đặt spaCy và tải mô hình.
+# !python -m spacy download en_core_web_sm
+
+# ===================================================================
+# PHẦN 0: CÁC THƯ VIỆN CẦN THIẾT
+# ===================================================================
+# !pip install optuna
+# !pip install gensim
+# !python -m spacy download en_core_web_sm
+
+print("🚀 Đang import các thư viện...")
+import pandas as pd
+import numpy as np
+import ast
+import pickle
+import os
+import json
+from collections import Counter
+import re
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MultiLabelBinarizer
+from sklearn.multiclass import OneVsRestClassifier
+from lightgbm import LGBMClassifier
+from sklearn.metrics import f1_score, classification_report
+from tqdm.auto import tqdm
+import optuna
+import gensim.downloader
+import spacy # ### V2.2 CẢI TIẾN: Thay thế NLTK bằng spaCy
+import warnings
+warnings.filterwarnings('ignore')
+optuna.logging.set_verbosity(optuna.logging.WARNING)
+print("✅ Import thư viện hoàn tất.")
+
+# ===================================================================
+# PHẦN 0B: CẤU HÌNH
+# ===================================================================
+N_TARGET_LABELS = 17
+OPTUNA_N_TRIALS = 25
+OPTUNA_TIMEOUT = 3600
+
+LGBM_FIXED_PARAMS = {
+    'device': 'gpu',
+    'random_state': 42,
+    'n_jobs': -1,
+    'class_weight': 'balanced'
+}
+print("⚡️ Đã kích hoạt chế độ huấn luyện GPU và cấu hình cho Version 2.2 (spaCy + FastText)!")
+
+# ===================================================================
+# PHẦN 1: TẢI DỮ LIỆU VÀ MÔ HÌNH NLP
+# ===================================================================
+print("\n🚀 [Bước 1/7] Tải dữ liệu và mô hình spaCy...")
+# Tải mô hình spaCy nhỏ gọn, chỉ cần tokenizer và stopwords
+print("   - Đang tải mô hình spaCy 'en_core_web_sm'...")
+nlp = spacy.load("en_core_web_sm", disable=["parser", "ner"])
+stop_words = nlp.Defaults.stop_words
+print("   - Tải spaCy hoàn tất.")
+
+FILE_PATH = "/content/drive/MyDrive/data/arxiv_perfectly_balanced.csv"
+try:
+    df = pd.read_csv(FILE_PATH)
+    print(f"✅ Tải thành công file: '{FILE_PATH}' ({len(df):,} mẫu)")
+except FileNotFoundError:
+    print(f"❌ Lỗi: Không tìm thấy file '{FILE_PATH}'. Hãy đảm bảo bạn đã kết nối Google Drive và đường dẫn là chính xác.")
+    exit()
+
+df['parent_labels'] = df['parent_labels'].apply(ast.literal_eval)
+df['child_labels'] = df['child_labels'].apply(ast.literal_eval)
+
+# ===================================================================
+# PHẦN 2: MÃ HÓA VĂN BẢN VỚI FASTTEXT
+# ===================================================================
+print("\n🚀 [Bước 2/7] Tải mô hình FastText và mã hóa văn bản...")
+print("   - Đang tải mô hình fasttext-wiki-news-subwords-300... (Lần đầu có thể mất vài phút)")
+ft_model = gensim.downloader.load('fasttext-wiki-news-subwords-300')
+embedding_dim = ft_model.vector_size
+print(f"✅ Tải mô hình FastText thành công (số chiều vector: {embedding_dim}).")
+
+# ### V2.2 CẢI TIẾN: Hàm tiền xử lý dùng spaCy ###
+def preprocess_text_spacy(text):
+    doc = nlp(str(text).lower())
+    tokens = [
+        token.lemma_ for token in doc 
+        if not token.is_stop and not token.is_punct and token.is_alpha
+    ]
+    return tokens
+
+def abstract_to_vector(abstract, model, dim):
+    tokens = preprocess_text_spacy(abstract)
+    word_vectors = [model[word] for word in tokens if word in model.key_to_index]
+    
+    if not word_vectors:
+        return np.zeros(dim)
+    
+    return np.mean(word_vectors, axis=0)
+
+print("   - Đang tạo vector đặc trưng cho các abstract (sử dụng spaCy)...")
+tqdm.pandas(desc="Mã hóa Abstract")
+df['abstract_vector'] = df['abstract'].progress_apply(lambda x: abstract_to_vector(x, ft_model, embedding_dim))
+
+all_embeddings = np.vstack(df['abstract_vector'].values)
+print(f"✅ Mã hóa FastText hoàn tất. Kích thước ma trận đặc trưng: {all_embeddings.shape}")
+
+# ===================================================================
+# PHẦN 3: TÌM SIÊU THAM SỐ TỐI ƯU CHO TẦNG 1 VỚI OPTUNA
+# ===================================================================
+print(f"\n🚀 [Bước 3/7] Tối ưu siêu tham số cho Tầng 1 với Optuna...")
+
+parent_label_counts = Counter([item for sublist in df['parent_labels'] for item in sublist])
+target_parents = [label for label, count in parent_label_counts.most_common(N_TARGET_LABELS)]
+mlb_parent = MultiLabelBinarizer(classes=target_parents)
+y_parent_binarized = mlb_parent.fit_transform(df['parent_labels'])
+indices = df.index.values
+
+X_train_emb, X_test_emb, y_train_p, y_test_p, indices_train, indices_test = train_test_split(
+    all_embeddings, y_parent_binarized, indices, test_size=0.2, random_state=42
+)
+
+def objective(trial):
+    params = {
+        'n_estimators': trial.suggest_int('n_estimators', 200, 1200, step=50),
+        'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.2, log=True),
+        'num_leaves': trial.suggest_int('num_leaves', 20, 150),
+        'max_depth': trial.suggest_int('max_depth', 5, 25),
+        'reg_alpha': trial.suggest_float('reg_alpha', 1e-3, 10.0, log=True),
+        'reg_lambda': trial.suggest_float('reg_lambda', 1e-3, 10.0, log=True),
+        'colsample_bytree': trial.suggest_float('colsample_bytree', 0.6, 1.0),
+        'subsample': trial.suggest_float('subsample', 0.6, 1.0),
+    }
+    params.update(LGBM_FIXED_PARAMS)
+    
+    X_train_opt, X_val_opt, y_train_opt, y_val_opt = train_test_split(X_train_emb, y_train_p, test_size=0.25, random_state=42)
+    
+    model = OneVsRestClassifier(LGBMClassifier(**params), n_jobs=1)
+    model.fit(X_train_opt, y_train_opt)
+    
+    preds = model.predict(X_val_opt)
+    score = f1_score(y_val_opt, preds, average='weighted', zero_division=0)
+    
+    return score
+
+study = optuna.create_study(direction='maximize')
+study.optimize(objective, n_trials=OPTUNA_N_TRIALS, timeout=OPTUNA_TIMEOUT)
+best_params_tier1 = study.best_params
+print(f"✅ Tối ưu hóa hoàn tất sau {len(study.trials)} trials.")
+print(f"   - F1-Score tốt nhất trên tập validation: {study.best_value:.4f}")
+print(f"   - Siêu tham số tối ưu: {best_params_tier1}")
+
+# ===================================================================
+# PHẦN 4: HUẤN LUYỆN TẦNG 1 VỚI THAM SỐ TỐT NHẤT
+# ===================================================================
+print("\n🚀 [Bước 4/7] Huấn luyện Tầng 1 trên toàn bộ tập train với tham số tốt nhất...")
+final_params = best_params_tier1.copy()
+final_params.update(LGBM_FIXED_PARAMS)
+parent_model = OneVsRestClassifier(LGBMClassifier(**final_params), n_jobs=1)
+parent_model.fit(X_train_emb, y_train_p)
+print("✅ Huấn luyện mô hình Tầng 1 cuối cùng hoàn tất.")
+
+# ===================================================================
+# PHẦN 5: HUẤN LUYỆN TẦNG 2
+# ===================================================================
+print("\n🚀 [Bước 5/7] Huấn luyện Tầng 2...")
+tier2_classifiers, tier2_mlbs = {}, {}
+df_train = df.loc[indices_train]
+emb_train = all_embeddings[indices_train]
+for parent_label in tqdm(mlb_parent.classes_, desc="Huấn luyện các mô hình Tầng 2"):
+    indices_with_parent_local = [i for i, labels in enumerate(df_train['parent_labels']) if parent_label in labels]
+    if len(indices_with_parent_local) < 20: continue
+    df_child, X_child_emb = df_train.iloc[indices_with_parent_local], emb_train[indices_with_parent_local]
+    y_child_raw = df_child['child_labels'].apply(lambda l: [c for c in l if c.startswith(parent_label)])
+    if y_child_raw.apply(len).sum() == 0: continue
+    mlb_child = MultiLabelBinarizer()
+    y_child_binarized = mlb_child.fit_transform(y_child_raw)
+    if y_child_binarized.shape[1] < 2: continue
+    child_model = OneVsRestClassifier(LGBMClassifier(**final_params), n_jobs=1)
+    child_model.fit(X_child_emb, y_child_binarized)
+    tier2_classifiers[parent_label], tier2_mlbs[parent_label] = child_model, mlb_child
+print(f"\n✅ Đã huấn luyện {len(tier2_classifiers)} mô hình Tầng 2.")
+
+# ===================================================================
+# PHẦN 6: ĐÁNH GIÁ VÀ TẠO BÁO CÁO METRICS CHI TIẾT
+# ===================================================================
+print("\n🚀 [Bước 6/7] Đánh giá và tạo báo cáo metrics chi tiết...")
+df_test = df.loc[indices_test]
+emb_test = all_embeddings[indices_test]
+
+true_child_labels_raw = df_test['child_labels'].tolist()
+mlb_all_children = MultiLabelBinarizer().fit(df['child_labels'])
+y_test_child_true_binarized = mlb_all_children.transform(true_child_labels_raw)
+y_pred_parent_binarized = parent_model.predict(emb_test)
+final_parents_raw = mlb_parent.inverse_transform(y_pred_parent_binarized)
+final_predictions_raw = []
+for i in tqdm(range(len(df_test)), desc="Dự đoán Tầng 2 trên tập test"):
+    predicted_parents = final_parents_raw[i]
+    child_preds = set()
+    if predicted_parents:
+        emb_vector = emb_test[i:i+1]
+        for parent in predicted_parents:
+            if parent in tier2_classifiers:
+                child_model, child_mlb = tier2_classifiers[parent], tier2_mlbs[parent]
+                pred_child_binarized = child_model.predict(emb_vector)
+                child_preds.update(child_mlb.inverse_transform(pred_child_binarized)[0])
+    final_predictions_raw.append(sorted(list(child_preds)))
+y_pred_child_final_binarized = mlb_all_children.transform(final_predictions_raw)
+
+metrics_report = {}
+report_parent_dict = classification_report(y_test_p, y_pred_parent_binarized, target_names=mlb_parent.classes_, output_dict=True, zero_division=0)
+metrics_report['f1_macro_parent'] = report_parent_dict['macro avg']['f1-score']
+metrics_report['f1_weighted_parent'] = report_parent_dict['weighted avg']['f1-score']
+metrics_report['f1_samples_parent'] = f1_score(y_test_p, y_pred_parent_binarized, average='samples', zero_division=0)
+metrics_report['f1_macro_children_overall'] = f1_score(y_test_child_true_binarized, y_pred_child_final_binarized, average='macro', zero_division=0)
+metrics_report['f1_weighted_children_overall'] = f1_score(y_test_child_true_binarized, y_pred_child_final_binarized, average='weighted', zero_division=0)
+metrics_report['f1_samples_children_overall'] = f1_score(y_test_child_true_binarized, y_pred_child_final_binarized, average='samples', zero_division=0)
+metrics_report['best_hyperparameters_tier1'] = study.best_params
+
+print("\n" + "="*80)
+print(" " * 16 + "BÁO CÁO HIỆU SUẤT HỆ THỐNG - VERSION 2.2 (spaCy + FastText)")
+print("="*80)
+print(f"\n   - SIÊU THAM SỐ TỐI ƯU (từ Optuna):")
+for key, value in metrics_report['best_hyperparameters_tier1'].items():
+    if isinstance(value, float):
+        print(f"     - {key}: {value:.4f}")
+    else:
+        print(f"     - {key}: {value}")
+
+print("\n--- Tầng 1 (Dự đoán 17 Nhãn Cha chính) ---")
+print(f"   - ⭐️ F1-Score (Weighted Avg): {metrics_report['f1_weighted_parent']:.4f}")
+print(f"   - F1-Score (Macro Avg):        {metrics_report['f1_macro_parent']:.4f}")
+
+print("\n--- Toàn Hệ Thống (Dự đoán Nhãn Con Cuối Cùng) ---")
+print(f"   - ⭐️ F1-Score (Weighted Avg): {metrics_report['f1_weighted_children_overall']:.4f}")
+print(f"   - F1-Score (Macro Avg):        {metrics_report['f1_macro_children_overall']:.4f}")
+print("\n" + "="*80)
+
+# ===================================================================
+# PHẦN 7: LƯU KẾT QUẢ VÀ CÁC THÀNH PHẦN
+# ===================================================================
+print("\n🚀 [Bước 7/7] Lưu kết quả và các thành phần...")
+MODEL_DIR = "/content/drive/MyDrive/data/saved_models_v2.2_spacy_fasttext_optuna/"
+os.makedirs(MODEL_DIR, exist_ok=True)
+with open(os.path.join(MODEL_DIR, 'tier1_classifier.pkl'), 'wb') as f: pickle.dump(parent_model, f)
+with open(os.path.join(MODEL_DIR, 'tier2_classifiers.pkl'), 'wb') as f: pickle.dump(tier2_classifiers, f)
+with open(os.path.join(MODEL_DIR, 'tier1_mlb.pkl'), 'wb') as f: pickle.dump(mlb_parent, f)
+with open(os.path.join(MODEL_DIR, 'tier2_mlbs.pkl'), 'wb') as f: pickle.dump(tier2_mlbs, f)
+with open(os.path.join(MODEL_DIR, 'metrics_report.json'), 'w') as f: json.dump(metrics_report, f, indent=4)
+print(f"✅ Đã lưu thành công các thành phần mô hình vào: {MODEL_DIR}")
+```
+**Version:** 2.2 - spaCy + FastText + Optuna  
+**So với Version 1.0:** Thay thế TF-IDF bằng FastText embeddings và tối ưu hóa siêu tham số bằng Optuna.
+
+## **1. Mục Tiêu**
+
+Version 2.2 được phát triển với hai mục tiêu chính:
+1.  **Giải quyết vấn đề hiệu năng:** Thay thế pipeline TF-IDF bằng một giải pháp nhẹ hơn (FastText) để chạy mượt mà trên Colab.
+2.  **Cải thiện hiệu suất:** Kỳ vọng rằng việc sử dụng word embeddings có ngữ nghĩa và tối ưu hóa siêu tham số sẽ cho kết quả tốt hơn V1.0.
+
+## **2. Kết Quả Thử Nghiệm (Version 2.2)**
+
+### **Bảng So Sánh Hiệu Suất: V1.0 vs V2.2**
+
+| Metric | V1.0 (TF-IDF 5k) | **V2.2 (FastText 300d)** | Thay Đổi | Phân Tích Nhanh |
+| :--- | :--- | :--- | :--- | :--- |
+| **Thời gian Dự đoán Tầng 2** | ~33 phút | **~5 phút** | **↓ 85%** | ✅ **Thành công lớn** |
+| **F1-Weighted (Tầng 1)** | 0.6483 | **0.6386** | **↓ 1.5%** | ⚠️ Giảm nhẹ |
+| **F1-Macro (Tầng 1)** | 0.6474 | **0.6359** | **↓ 1.8%** | ⚠️ Giảm nhẹ |
+| **F1-Weighted (Tầng 2)** | 0.4047 | **0.3732** | **↓ 7.8%** | ⚠️ Giảm đáng kể |
+| **F1-Macro (Tầng 2)** | 0.2543 | **0.2319** | **↓ 8.8%** | ⚠️ Giảm đáng kể |
+
+### **Hyperparameters Tối Ưu (từ Optuna):**
+-   `n_estimators`: 550
+-   `learning_rate`: 0.0522
+-   `num_leaves`: 146
+-   `max_depth`: **5**
+-   `reg_alpha`: 0.0081
+-   `reg_lambda`: 0.0563
+
+## **3. Phân Tích & Đánh Giá**
+
+Version 2.2 là một thử nghiệm cực kỳ thành công trong việc cung cấp thông tin, dù các chỉ số F1-score đã giảm.
+
+### **3.1. Điểm Tích Cực**
+-   **Vấn đề Hiệu năng đã được giải quyết triệt để:** Thời gian dự đoán giảm từ 33 phút xuống chỉ còn 5 phút là một thắng lợi lớn, chứng tỏ FastText là một lựa chọn tuyệt vời về mặt tốc độ và tài nguyên. Pipeline hiện tại đã sẵn sàng cho việc thử nghiệm nhanh chóng hơn.
+
+### **3.2. Phân Tích Sụt Giảm Hiệu Suất: Tại Sao Kết Quả Lại Thấp Hơn?**
+
+Đây là điểm mấu chốt. Dù sử dụng kỹ thuật có vẻ "hiện đại" hơn, hiệu suất lại giảm. Nguyên nhân đến từ hai yếu tố chính:
+
+#### **1. Sự "Pha Loãng" Tín Hiệu của Vector Trung Bình (Quan trọng nhất)**
+-   **TF-IDF (V1.0):** Rất giỏi trong việc nhận diện các **từ khóa quan trọng nhưng hiếm**. Ví dụ, một thuật ngữ như "abelian variety" hoặc "hadronization" có thể có điểm TF-IDF rất cao và trở thành một tín hiệu cực mạnh cho mô hình.
+-   **FastText (V2.2):** Phương pháp của chúng ta là **lấy trung bình vector của TẤT CẢ các từ** trong abstract. Điều này có một nhược điểm chí mạng: vector của một từ khóa cực kỳ quan trọng như "abelian variety" sẽ bị "pha loãng" bởi hàng trăm vector của các từ phổ biến khác như "study", "result", "paper", "method",... Tín hiệu đặc trưng mạnh mẽ của từ khóa đó bị mất đi trong giá trị trung bình.
+-   **Kết luận:** Đối với văn bản khoa học, nơi các thuật ngữ cụ thể mang tính quyết định, phương pháp "túi từ" của TF-IDF đôi khi lại hiệu quả hơn phương pháp lấy trung bình vector một cách ngây thơ.
+
+#### **2. Dấu Hiệu Overfitting trong Tối Ưu Hóa của Optuna**
+-   Hãy nhìn vào các tham số Optuna tìm được: `max_depth: 5` và `num_leaves: 146`.
+-   Đây là một **mâu thuẫn lớn**. Một cây quyết định có độ sâu tối đa là 5 (`max_depth=5`) chỉ có thể có tối đa **2^5 = 32** lá (`leaves`).
+-   Việc Optuna chọn `num_leaves=146` (nhiều hơn 32 rất nhiều) cho thấy LightGBM đang cố gắng tạo ra những cây rất "rộng" và "nông". Nó đang tạo ra rất nhiều quy tắc phân chia rất cụ thể ở các cấp độ thấp mà không xây dựng được các quy tắc tổng quát ở các cấp độ cao hơn.
+-   **Nguyên nhân:** Đây là dấu hiệu kinh điển của việc mô hình đang **overfit trên tập validation** trong quá trình tìm kiếm của Optuna. Nó đã tìm ra một bộ tham số "kỳ lạ" hoạt động tốt trên một phần nhỏ dữ liệu đó, nhưng lại không có khả năng tổng quát hóa tốt trên tập test cuối cùng.
+
+## **4. Hướng Cải Thiện cho Version 3.0 (Dựa trên kết quả V2.2)**
+
+Chúng ta đã học được rằng: 1) không thể bỏ qua tầm quan trọng của từ khóa, và 2) cần kiểm soát Optuna tốt hơn. Dưới đây là các bước đi tiếp theo rất rõ ràng.
+
+### **Ưu tiên #1: Kết hợp Sức mạnh của TF-IDF và Word Embeddings (TF-IDF Weighted Embeddings)**
+-   **Ý tưởng:** Thay vì lấy trung bình cộng các vector từ, chúng ta sẽ lấy **trung bình có trọng số**. Trọng số của mỗi từ chính là điểm TF-IDF của từ đó.
+-   **Quy trình:**
+    1.  Chạy `TfidfVectorizer` như V1.0 để có điểm số cho từng từ.
+    2.  Với mỗi abstract, khi tạo vector cuối cùng, nhân vector FastText của mỗi từ với điểm TF-IDF của từ đó, sau đó lấy tổng và chia cho tổng các điểm TF-IDF.
+-   **Lợi ích:** Cách tiếp cận "lai" này giữ lại được **ngữ nghĩa** của FastText và **tầm quan trọng** của từ khóa từ TF-IDF. Các từ quan trọng sẽ có đóng góp lớn hơn vào vector cuối cùng.
+
+### **Ưu tiên #2: Tinh Chỉnh Lại Không Gian Tìm Kiếm của Optuna**
+-   **Vấn đề:** Tham số `num_leaves` và `max_depth` đang mâu thuẫn.
+-   **Giải pháp:** Ràng buộc không gian tìm kiếm để nó hợp lý hơn.
+    -   Bỏ `max_depth` ra khỏi danh sách tìm kiếm và đặt một giá trị cố định (ví dụ: -1 để không giới hạn).
+    -   Hoặc, ràng buộc `num_leaves` trong hàm `objective`: `num_leaves = trial.suggest_int('num_leaves', 10, 2**params['max_depth'] - 1)`. Điều này buộc số lá phải nhỏ hơn mức tối đa cho phép của độ sâu.
+-   **Gợi ý:** Bắt đầu bằng cách chỉ tối ưu `n_estimators`, `learning_rate`, `num_leaves`, `reg_alpha`, `reg_lambda`. Đây là những tham số có tác động lớn nhất.
+
+### **Ưu tiên #3 (Con đường dài hạn): Tiến tới Contextual Embeddings**
+-   Kết quả này càng củng cố thêm giả thuyết rằng các mô hình có khả năng hiểu **ngữ cảnh** (như SciBERT) sẽ là chìa khóa để đạt được hiệu suất cao nhất, vì chúng không cần phải lấy trung bình vector và có thể hiểu được từ nào là quan trọng trong một câu cụ thể.
+
+## **5. Kết Luận Chung**
+
+Version 2.2 là một bước tiến quan trọng. Mặc dù F1-score giảm, chúng ta đã:
+1.  **Thành công** giải quyết vấn đề hiệu năng.
+2.  **Học được rằng** phương pháp lấy trung bình vector đơn giản không đủ tốt cho dữ liệu chuyên ngành.
+3.  **Phát hiện ra** điểm yếu trong cách cấu hình Optuna.
+
+Đây là những kinh nghiệm quý báu. Thất bại trong việc cải thiện metrics nhưng thành công trong việc thu thập thông tin để các phiên bản sau tốt hơn. Lộ trình cho V3.0 đã rất rõ ràng: kết hợp TF-IDF và FastText, đồng thời tinh chỉnh lại quy trình tối ưu hóa.
+
+# Version 3
+## Script
+```python
+# !pip install optuna
+# !pip install gensim
+# !python -m spacy download en_core_web_sm
+# %pip install cuml-cu12 cudf-cu12
+
+# ===================================================================
+#      VERSION 3.2: GPU-ACCELERATED TF-IDF + WEIGHTED FASTTEXT
+# ===================================================================
+# Script này sử dụng RAPIDS cuML để tăng tốc TF-IDF trên GPU.
+# Phiên bản này đã sửa lỗi TypeError khi xử lý vocabulary của cuML.
+# ===================================================================
+
 # ===================================================================
 # PHẦN 0: CÁC THƯ VIỆN CẦN THIẾT
 # ===================================================================
 print("🚀 Đang import các thư viện...")
-# ... (Phần import giữ nguyên như trước) ...
 import pandas as pd
 import numpy as np
 import ast
+import pickle
+import os
+import json
 from collections import Counter
+# ### V3.2 CẢI TIẾN: Thêm thư viện của RAPIDS ###
+import cudf
+from cuml.feature_extraction.text import TfidfVectorizer
 from sklearn.model_selection import train_test_split
+# Các thư viện còn lại
 from sklearn.preprocessing import MultiLabelBinarizer
-from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
-try:
-    from sentence_transformers import SentenceTransformer
-except ImportError:
-    print("⚠️ Thư viện sentence-transformers chưa được cài đặt. Đang tiến hành cài đặt...")
-    !pip install -U sentence-transformers
-    from sentence_transformers import SentenceTransformer
-    print("✅ Cài đặt sentence-transformers thành công!")
 from sklearn.multiclass import OneVsRestClassifier
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier, GradientBoostingClassifier
-from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
-from sklearn.metrics import f1_score, jaccard_score, classification_report
+from sklearn.metrics import f1_score, classification_report
+from tqdm.auto import tqdm
+import optuna
+import gensim.downloader
+import spacy
 import warnings
 warnings.filterwarnings('ignore')
+optuna.logging.set_verbosity(optuna.logging.WARNING)
 print("✅ Import thư viện hoàn tất.")
 
 # ===================================================================
-# PHẦN 1: TẢI VÀ CHUẨN BỊ DỮ LIỆU
+# PHẦN 0B: CẤU HÌNH
 # ===================================================================
-print("\n🚀 [Bước 1/5] Tải và chuẩn bị dữ liệu...")
+N_TARGET_LABELS = 17
+TFIDF_MAX_FEATURES = 15000
 
-# --- Cấu hình ---
-# Đảm bảo đường dẫn này CHÍNH XÁC
-FILE_PATH = "/content/drive/MyDrive/data/arxiv_perfectly_balanced.csv"
-SAMPLE_SIZE = None # Đặt là một số (ví dụ: 10000) để chạy thử, hoặc None để chạy toàn bộ
+OPTUNA_N_TRIALS = 30
+OPTUNA_TIMEOUT = 5400
 
-df = None # Khởi tạo df là None
+LGBM_FIXED_PARAMS = {
+    'device': 'gpu',
+    'random_state': 42,
+    'n_jobs': -1,
+    'class_weight': 'balanced'
+}
+print("⚡️ Đã kích hoạt chế độ huấn luyện GPU và cấu hình cho Version 3.2 (GPU TF-IDF)!")
+
+# ===================================================================
+# PHẦN 1: TẢI DỮ LIỆU VÀ MÔ HÌNH NLP
+# ===================================================================
+print("\n🚀 [Bước 1/8] Tải dữ liệu và mô hình NLP...")
+try:
+    nlp = spacy.load("en_core_web_sm")
+    print("   - Mô hình spaCy 'en_core_web_sm' đã có sẵn.")
+except OSError:
+    print("   - Lần đầu chạy, đang cài đặt và tải mô hình spaCy...")
+    os.system("python -m spacy download en_core_web_sm")
+    nlp = spacy.load("en_core_web_sm")
+nlp.disable_pipes("parser", "ner")
+print("   - Tải spaCy hoàn tất.")
+
+FILE_PATH = "/content/drive/MyDrive/AIO25/m04/data/arxiv_perfectly_balanced.csv"
 try:
     df = pd.read_csv(FILE_PATH)
     print(f"✅ Tải thành công file: '{FILE_PATH}' ({len(df):,} mẫu)")
-
-    if SAMPLE_SIZE and SAMPLE_SIZE < len(df):
-        print(f"   - Lấy mẫu thử nghiệm với {SAMPLE_SIZE:,} dòng.")
-        df = df.sample(n=SAMPLE_SIZE, random_state=42).reset_index(drop=True)
-
 except FileNotFoundError:
-    print(f"❌ LỖI NGHIÊM TRỌNG: Không tìm thấy file tại '{FILE_PATH}'.")
-    print("   - Vui lòng kiểm tra lại đường dẫn và tên file.")
-    # Chạy lệnh ls để giúp debug
-    !ls "/content/drive/MyDrive/AIO25/m04/data/"
+    print(f"❌ Lỗi: Không tìm thấy file '{FILE_PATH}'.")
+    exit()
 
-# --- Chỉ chạy phần còn lại nếu df được tải thành công ---
-if df is not None:
-    # Chuyển đổi các cột nhãn từ chuỗi về list
-    df['parent_labels'] = df['parent_labels'].apply(ast.literal_eval)
-    df['child_labels'] = df['child_labels'].apply(ast.literal_eval)
-
-    # --- Chuẩn bị dữ liệu cho Tầng 1: Dự đoán Nhãn Cha ---
-    X = df['abstract'].astype(str)
-    y = df['parent_labels']
-
-    # Mã hóa nhãn đa nhãn thành ma trận nhị phân
-    mlb = MultiLabelBinarizer()
-    y_binarized = mlb.fit_transform(y)
-    print(f"✅ Đã mã hóa {len(mlb.classes_)} nhãn cha thành ma trận nhị phân.")
-    print(f"   - Các lớp: {mlb.classes_}")
-
-    # Chia dữ liệu train/test
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y_binarized, test_size=0.2, random_state=42
-    )
-    print(f"✅ Đã chia dữ liệu: {len(X_train):,} train, {len(X_test):,} test.")
-
-    # GIẢI PHÓNG BỘ NHỚ
-    del df
-    import gc
-    gc.collect()
-    print("   - Đã giải phóng bộ nhớ của DataFrame gốc.")
+df['parent_labels'] = df['parent_labels'].apply(ast.literal_eval)
+df['child_labels'] = df['child_labels'].apply(ast.literal_eval)
 
 # ===================================================================
-# PHẦN 2: MÃ HÓA VĂN BẢN (FEATURE ENGINEERING) - ĐÃ SỬA LỖI
+# PHẦN 2: TIỀN XỬ LÝ VĂN BẢN VÀ HUẤN LUYỆN TF-IDF TRÊN GPU
 # ===================================================================
-print("\n🚀 [Bước 2/5] Mã hóa văn bản (BoW, TF-IDF, Embeddings)...")
+print("\n🚀 [Bước 2/8] Tiền xử lý văn bản và huấn luyện TF-IDF trên GPU...")
 
-# --- 2.1 Bag-of-Words (BoW) ---
-print("\n--- 2.1 Mã hóa bằng Bag-of-Words ---")
-bow_vectorizer = CountVectorizer(max_features=10000, stop_words='english')
-X_train_bow = bow_vectorizer.fit_transform(X_train)
-X_test_bow = bow_vectorizer.transform(X_test)
-print(f"   - Kích thước X_train_bow: {X_train_bow.shape}")
+def preprocess_text_spacy(text):
+    doc = nlp(str(text).lower())
+    tokens = [token.lemma_ for token in doc if not token.is_stop and not token.is_punct and token.is_alpha]
+    return " ".join(tokens)
 
-# --- 2.2 TF-IDF ---
-print("\n--- 2.2 Mã hóa bằng TF-IDF ---")
-tfidf_vectorizer = TfidfVectorizer(max_features=10000, stop_words='english')
-X_train_tfidf = tfidf_vectorizer.fit_transform(X_train)
-X_test_tfidf = tfidf_vectorizer.transform(X_test)
-print(f"   - Kích thước X_train_tfidf: {X_train_tfidf.shape}")
+tqdm.pandas(desc="Tiền xử lý Abstract")
+df['processed_abstract'] = df['abstract'].progress_apply(preprocess_text_spacy)
 
+print("   - Bắt đầu huấn luyện TF-IDF trên GPU (sẽ nhanh hơn rất nhiều)...")
+cudf_series = cudf.Series(df['processed_abstract'])
+tfidf_vectorizer_gpu = TfidfVectorizer(max_features=TFIDF_MAX_FEATURES)
+tfidf_vectorizer_gpu.fit(cudf_series)
 
-# --- 2.3 Sentence Embeddings (SỬ DỤNG CLASS MỚI ĐÃ TỐI ƯU) ---
-print("\n--- 2.3 Mã hóa bằng Sentence Embeddings ---")
+idf_values = tfidf_vectorizer_gpu.idf_
+# ### SỬA LỖI LẦN 2: Dùng phương pháp đảo ngược Series, an toàn và hiệu quả ###
+vocab_gpu = tfidf_vectorizer_gpu.vocabulary_
+vocab_cpu = vocab_gpu.to_pandas()
 
-class EmbeddingVectorizer:
-    """Mã hóa văn bản thành vector embeddings sử dụng SentenceTransformers."""
-    def __init__(self, model_name: str = 'all-MiniLM-L6-v2'):
-        self.model = SentenceTransformer(model_name)
-        self.is_e5_model = 'e5' in model_name.lower()
+# Tạo một Series mới với index là chỉ số cột và value là từ, sau đó sắp xếp
+index_to_word_series = pd.Series(vocab_cpu.index, index=vocab_cpu.values).sort_index()
+# Lấy danh sách từ đã được sắp xếp chính xác
+feature_names = index_to_word_series.to_list()
 
-    # Sửa đổi: Loại bỏ tham số precision khỏi định nghĩa hàm
-    def transform(self, texts: pd.Series, batch_size: int = 64) -> np.ndarray:
-        texts_list = texts.tolist()
-        if self.is_e5_model:
-            print(f"   - Mô hình E5 được phát hiện. Đang thêm tiền tố 'passage: '...")
-            texts_to_encode = [f"passage: {text}" for text in texts_list]
-        else:
-            texts_to_encode = texts_list
-
-        print(f"   - Bắt đầu mã hóa {len(texts_to_encode):,} văn bản với mô hình '{self.model.tokenizer.name_or_path}'...")
-        embeddings = self.model.encode(
-            texts_to_encode,
-            show_progress_bar=True,
-            normalize_embeddings=True,
-            batch_size=batch_size
-            # Không truyền tham số precision nữa
-        )
-        return embeddings
-
-# **LỰA CHỌN MÔ HÌNH EMBEDDING**
-model_name = 'all-MiniLM-L6-v2' # Nhanh, hiệu quả, 384 chiều
-
-embedding_vectorizer = EmbeddingVectorizer(model_name=model_name)
-
-# Sửa đổi: Loại bỏ tham số precision khi gọi hàm
-X_train_embeddings = embedding_vectorizer.transform(X_train, batch_size=128)
-X_test_embeddings = embedding_vectorizer.transform(X_test, batch_size=128)
-
-print("✅ Mã hóa embeddings hoàn tất.")
-print(f"   - Kích thước X_train_embeddings: {X_train_embeddings.shape}")
+idf_weights = dict(zip(feature_names, idf_values))
+print("✅ Huấn luyện TF-IDF trên GPU và tạo trọng số IDF thành công.")
 
 # ===================================================================
-# PHẦN 3: ĐỊNH NGHĨA CÁC MÔ HÌNH (ĐÃ TỐI ƯU HÓA)
+# PHẦN 3: TẢI FASTTEXT VÀ TẠO VECTOR KẾT HỢP
 # ===================================================================
-print("\n🚀 [Bước 3/5] Định nghĩa các mô hình hiệu năng cao...")
+print("\n🚀 [Bước 3/8] Tải FastText và tạo vector đặc trưng kết hợp...")
+print("   - Đang tải mô hình fasttext-wiki-news-subwords-300...")
+ft_model = gensim.downloader.load('fasttext-wiki-news-subwords-300')
+embedding_dim = ft_model.vector_size
+print(f"✅ Tải mô hình FastText thành công (số chiều: {embedding_dim}).")
 
-# Các mô hình này nhanh và mạnh mẽ
-models_to_train = {
-    'KNN': KNeighborsClassifier(n_jobs=-1),
-    'DecisionTree': DecisionTreeClassifier(random_state=42),
-    'RandomForest': RandomForestClassifier(random_state=42, n_jobs=-1),
-    'XGBoost': OneVsRestClassifier(
-        XGBClassifier(random_state=42, use_label_encoder=False, eval_metric='logloss', n_jobs=-1),
-        n_jobs=-1
-    ),
-    'LightGBM': OneVsRestClassifier(
-        LGBMClassifier(random_state=42, n_jobs=-1),
-        n_jobs=-1
-    ),
-}
+def weighted_average_vector(processed_text, ft_model, idf_dict, dim):
+    tokens = processed_text.split()
+    weighted_vectors = []
+    total_weight = 0.0
+    for token in tokens:
+        if token in ft_model.key_to_index and token in idf_dict:
+            vector = ft_model[token]
+            weight = idf_dict[token]
+            weighted_vectors.append(vector * weight)
+            total_weight += weight
+    if not weighted_vectors: return np.zeros(dim)
+    final_vector = np.sum(weighted_vectors, axis=0) / total_weight
+    return final_vector
 
-print(f"✅ Sẵn sàng huấn luyện {len(models_to_train)} mô hình hiệu năng cao.")
+print("   - Đang tạo vector đặc trưng kết hợp cho các abstract...")
+tqdm.pandas(desc="Tạo Vector Kết Hợp")
+df['abstract_vector'] = df['processed_abstract'].progress_apply(
+    lambda x: weighted_average_vector(x, ft_model, idf_weights, embedding_dim)
+)
 
-# ===================================================================
-# PHẦN 4: HUẤN LUYỆN VÀ ĐÁNH GIÁ (ĐÃ SỬA LỖI VÀ THÊM SO SÁNH)
-# ===================================================================
-print("\n🚀 [Bước 4/5] Bắt đầu quá trình huấn luyện và đánh giá...")
-
-from sklearn.metrics import accuracy_score
-from tqdm.auto import tqdm
-
-datasets_for_training = {
-    'BoW': (X_train_bow.astype(np.float32), X_test_bow.astype(np.float32)), # ÉP KIỂU Ở ĐÂY
-    'TF-IDF': (X_train_tfidf, X_test_tfidf),
-    'Embeddings': (X_train_embeddings, X_test_embeddings)
-}
-
-results = []
-
-# --- Chuẩn bị dữ liệu để tính Accuracy so sánh ---
-# Lấy nhãn đầu tiên từ y_test đa nhãn
-y_test_single_label = np.array([np.where(row == 1)[0][0] if np.sum(row) > 0 else -1 for row in y_test])
-
-
-total_runs = len(models_to_train) * len(datasets_for_training)
-with tqdm(total=total_runs, desc="Tổng tiến độ huấn luyện") as pbar:
-    for model_name, model in models_to_train.items():
-        for data_name, (X_train_data, X_test_data) in datasets_for_training.items():
-            pbar.set_description(f"Huấn luyện {model_name} với {data_name}")
-            
-            model.fit(X_train_data, y_train)
-            y_pred = model.predict(X_test_data)
-            
-            # --- TÍNH TOÁN CÁC METRICS ---
-            subset_accuracy = accuracy_score(y_test, y_pred)
-            f1 = f1_score(y_test, y_pred, average='samples', zero_division=0)
-            jaccard = jaccard_score(y_test, y_pred, average='samples', zero_division=0)
-
-            # --- TÍNH ACCURACY ĐỂ SO SÁNH ---
-            # Chuyển y_pred đa nhãn thành đơn nhãn (lấy nhãn đầu tiên)
-            y_pred_single_label = np.array([np.where(row == 1)[0][0] if np.sum(row) > 0 else -1 for row in y_pred])
-            # Tính accuracy trên phiên bản đơn nhãn
-            comparative_accuracy = accuracy_score(y_test_single_label, y_pred_single_label)
-            
-            results.append({
-                'Model': model_name,
-                'Encoding': data_name,
-                'Comparative Accuracy': comparative_accuracy, # THÊM CỘT NÀY
-                'Subset Accuracy': subset_accuracy,
-                'F1 Score (Samples)': f1,
-                'Jaccard Score (Samples)': jaccard
-            })
-            
-            print(f"\n--- Kết quả cho: {model_name} với {data_name} ---")
-            print(f"   -> Accuracy (So sánh): {comparative_accuracy:.4f}") # THÊM DÒNG NÀY
-            print(f"   -> Subset Accuracy: {subset_accuracy:.4f}")
-            print(f"   -> F1 Score: {f1:.4f}")
-            print(f"   -> Jaccard Score: {jaccard:.4f}")
-            
-            pbar.update(1)
-
+all_embeddings = np.vstack(df['abstract_vector'].values)
+print(f"✅ Tạo vector đặc trưng kết hợp hoàn tất. Kích thước: {all_embeddings.shape}")
 
 # ===================================================================
-# PHẦN 5: TỔNG KẾT KẾT QUẢ
+# PHẦN 4: TỐI ƯU HÓA SIÊU THAM SỐ VỚI OPTUNA
 # ===================================================================
-print("\n🚀 [Bước 5/5] Tổng kết kết quả...")
-results_df = pd.DataFrame(results)
-# Sắp xếp theo Comparative Accuracy để dễ so sánh nhất
-results_df = results_df.sort_values(by='Comparative Accuracy', ascending=False).reset_index(drop=True)
-print("\n" + "="*120)
-print(" " * 40 + "BẢNG XẾP HẠNG KẾT QUẢ PHÂN LOẠI NHÃN CHA")
-print("="*120)
-print(results_df.to_string())
-print("="*120)
+print(f"\n🚀 [Bước 4/8] Tối ưu siêu tham số cho Tầng 1 với Optuna...")
 
-# In ra classification report chi tiết cho mô hình tốt nhất
-if not results_df.empty:
-    best_model_info = results_df.iloc[0]
-    best_model_name = best_model_info['Model']
-    best_encoding_name = best_model_info['Encoding']
+parent_label_counts = Counter([item for sublist in df['parent_labels'] for item in sublist])
+target_parents = [label for label, count in parent_label_counts.most_common(N_TARGET_LABELS)]
+mlb_parent = MultiLabelBinarizer(classes=target_parents)
+y_parent_binarized = mlb_parent.fit_transform(df['parent_labels'])
+indices = df.index.values
 
-    print(f"\n🔍 Phân tích chi tiết cho mô hình tốt nhất: {best_model_name} với {best_encoding_name}")
-    best_model = models_to_train[best_model_name]
-    X_train_best, X_test_best = datasets_for_training[best_encoding_name]
+X_train_emb, X_test_emb, y_train_p, y_test_p, indices_train, indices_test = train_test_split(
+    all_embeddings, y_parent_binarized, indices, test_size=0.2, random_state=42
+)
 
-    print("   - Đang huấn luyện lại mô hình tốt nhất để tạo report chi tiết...")
-    best_model.fit(X_train_best, y_train)
-    y_pred_best = best_model.predict(X_test_best)
+def objective(trial):
+    params = {
+        'n_estimators': trial.suggest_int('n_estimators', 300, 1500, step=100),
+        'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.1, log=True),
+        'reg_alpha': trial.suggest_float('reg_alpha', 1e-2, 10.0, log=True),
+        'reg_lambda': trial.suggest_float('reg_lambda', 1e-2, 10.0, log=True),
+        'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 1.0),
+        'subsample': trial.suggest_float('subsample', 0.5, 1.0),
+        'num_leaves': trial.suggest_int('num_leaves', 20, 150),
+    }
+    params.update(LGBM_FIXED_PARAMS)
+    
+    X_train_opt, X_val_opt, y_train_opt, y_val_opt = train_test_split(X_train_emb, y_train_p, test_size=0.25, random_state=42)
+    
+    model = OneVsRestClassifier(LGBMClassifier(**params), n_jobs=1)
+    model.fit(X_train_opt, y_train_opt)
+    preds = model.predict(X_val_opt)
+    score = f1_score(y_val_opt, preds, average='weighted', zero_division=0)
+    return score
 
-    report = classification_report(y_test, y_pred_best, target_names=mlb.classes_, zero_division=0)
-    print(report)
-else:
-    print("⚠️ Không có kết quả nào để phân tích.")
+study = optuna.create_study(direction='maximize')
+study.optimize(objective, n_trials=OPTUNA_N_TRIALS, timeout=OPTUNA_TIMEOUT)
+best_params_tier1 = study.best_params
+print(f"✅ Tối ưu hóa hoàn tất sau {len(study.trials)} trials.")
+print(f"   - F1-Score tốt nhất trên tập validation: {study.best_value:.4f}")
+print(f"   - Siêu tham số tối ưu: {best_params_tier1}")
+
+# ===================================================================
+# PHẦN 5: HUẤN LUYỆN TẦNG 1
+# ===================================================================
+print("\n🚀 [Bước 5/8] Huấn luyện Tầng 1 với tham số tốt nhất...")
+final_params = best_params_tier1.copy()
+final_params.update(LGBM_FIXED_PARAMS)
+parent_model = OneVsRestClassifier(LGBMClassifier(**final_params), n_jobs=1)
+parent_model.fit(X_train_emb, y_train_p)
+print("✅ Huấn luyện Tầng 1 hoàn tất.")
+
+# ===================================================================
+# PHẦN 6: HUẤN LUYỆN TẦNG 2
+# ===================================================================
+print("\n🚀 [Bước 6/8] Huấn luyện Tầng 2...")
+tier2_classifiers, tier2_mlbs = {}, {}
+df_train = df.loc[indices_train]
+for parent_label in tqdm(mlb_parent.classes_, desc="Huấn luyện các mô hình Tầng 2"):
+    indices_with_parent_local = [i for i, labels in enumerate(df_train['parent_labels']) if parent_label in labels]
+    if len(indices_with_parent_local) < 20: continue
+    df_child, X_child_emb = df_train.iloc[indices_with_parent_local], X_train_emb[indices_with_parent_local]
+    y_child_raw = df_child['child_labels'].apply(lambda l: [c for c in l if c.startswith(parent_label)])
+    if y_child_raw.apply(len).sum() == 0: continue
+    mlb_child = MultiLabelBinarizer()
+    y_child_binarized = mlb_child.fit_transform(y_child_raw)
+    if y_child_binarized.shape[1] < 2: continue
+    child_model = OneVsRestClassifier(LGBMClassifier(**final_params), n_jobs=1)
+    child_model.fit(X_child_emb, y_child_binarized)
+    tier2_classifiers[parent_label], tier2_mlbs[parent_label] = child_model, mlb_child
+print(f"\n✅ Đã huấn luyện {len(tier2_classifiers)} mô hình Tầng 2.")
+
+# ===================================================================
+# PHẦN 7: ĐÁNH GIÁ
+# ===================================================================
+print("\n🚀 [Bước 7/8] Đánh giá và tạo báo cáo metrics chi tiết...")
+df_test = df.loc[indices_test]
+emb_test = X_test_emb
+
+true_child_labels_raw = df_test['child_labels'].tolist()
+mlb_all_children = MultiLabelBinarizer().fit(df['child_labels'])
+y_test_child_true_binarized = mlb_all_children.transform(true_child_labels_raw)
+y_pred_parent_binarized = parent_model.predict(emb_test)
+final_parents_raw = mlb_parent.inverse_transform(y_pred_parent_binarized)
+final_predictions_raw = []
+for i in tqdm(range(len(df_test)), desc="Dự đoán Tầng 2 trên tập test"):
+    predicted_parents = final_parents_raw[i]
+    child_preds = set()
+    if predicted_parents:
+        emb_vector = emb_test[i:i+1]
+        for parent in predicted_parents:
+            if parent in tier2_classifiers:
+                child_model, child_mlb = tier2_classifiers[parent], tier2_mlbs[parent]
+                pred_child_binarized = child_model.predict(emb_vector)
+                child_preds.update(child_mlb.inverse_transform(pred_child_binarized)[0])
+    final_predictions_raw.append(sorted(list(child_preds)))
+y_pred_child_final_binarized = mlb_all_children.transform(final_predictions_raw)
+metrics_report = {}
+report_parent_dict = classification_report(y_test_p, y_pred_parent_binarized, target_names=mlb_parent.classes_, output_dict=True, zero_division=0)
+metrics_report['f1_macro_parent'] = report_parent_dict['macro avg']['f1-score']
+metrics_report['f1_weighted_parent'] = report_parent_dict['weighted avg']['f1-score']
+metrics_report['f1_samples_parent'] = f1_score(y_test_p, y_pred_parent_binarized, average='samples', zero_division=0)
+metrics_report['f1_macro_children_overall'] = f1_score(y_test_child_true_binarized, y_pred_child_final_binarized, average='macro', zero_division=0)
+metrics_report['f1_weighted_children_overall'] = f1_score(y_test_child_true_binarized, y_pred_child_final_binarized, average='weighted', zero_division=0)
+metrics_report['f1_samples_children_overall'] = f1_score(y_test_child_true_binarized, y_pred_child_final_binarized, average='samples', zero_division=0)
+metrics_report['best_hyperparameters_tier1'] = study.best_params
+
+print("\n" + "="*80)
+print(" " * 12 + "BÁO CÁO HIỆU SUẤT HỆ THỐNG - VERSION 3.2 (GPU TF-IDF)")
+print("="*80)
+print(f"\n   - SIÊU THAM SỐ TỐI ƯU (từ Optuna):")
+for key, value in metrics_report['best_hyperparameters_tier1'].items():
+    if isinstance(value, float): print(f"     - {key}: {value:.4f}")
+    else: print(f"     - {key}: {value}")
+print("\n--- Tầng 1 (Dự đoán 17 Nhãn Cha chính) ---")
+print(f"   - ⭐️ F1-Score (Weighted Avg): {metrics_report['f1_weighted_parent']:.4f}")
+print(f"   - F1-Score (Macro Avg):        {metrics_report['f1_macro_parent']:.4f}")
+print("\n--- Toàn Hệ Thống (Dự đoán Nhãn Con Cuối Cùng) ---")
+print(f"   - ⭐️ F1-Score (Weighted Avg): {metrics_report['f1_weighted_children_overall']:.4f}")
+print(f"   - F1-Score (Macro Avg):        {metrics_report['f1_macro_children_overall']:.4f}")
+print("\n" + "="*80)
+
+# ===================================================================
+# PHẦN 8: LƯU KẾT QUẢ
+# ===================================================================
+print("\n🚀 [Bước 8/8] Lưu kết quả và các thành phần...")
+MODEL_DIR = "/content/drive/MyDrive/AIO25/m04/data/saved_models_v3.2_gpu_tfidf_weighted_fasttext/"
+os.makedirs(MODEL_DIR, exist_ok=True)
+with open(os.path.join(MODEL_DIR, 'tier1_classifier.pkl'), 'wb') as f: pickle.dump(parent_model, f)
+with open(os.path.join(MODEL_DIR, 'tier2_classifiers.pkl'), 'wb') as f: pickle.dump(tier2_classifiers, f)
+with open(os.path.join(MODEL_DIR, 'tier1_mlb.pkl'), 'wb') as f: pickle.dump(mlb_parent, f)
+with open(os.path.join(MODEL_DIR, 'tier2_mlbs.pkl'), 'wb') as f: pickle.dump(tier2_mlbs, f)
+with open(os.path.join(MODEL_DIR, 'cuml_tfidf_vectorizer_v3.pkl'), 'wb') as f: pickle.dump(tfidf_vectorizer_gpu, f)
+with open(os.path.join(MODEL_DIR, 'metrics_report.json'), 'w') as f: json.dump(metrics_report, f, indent=4)
+print(f"✅ Đã lưu thành công các thành phần mô hình vào: {MODEL_DIR}")
 ```
-#### 1. So Sánh Cách Tiếp Cận: Cũ vs. Mới
+**Version:** 3.2 - GPU TF-IDF Weighted FastText + Smart Optuna  
+**So với các phiên bản trước:** Một thử nghiệm kết hợp các phương pháp trích xuất đặc trưng nhằm tận dụng ưu điểm của cả hai.
 
-Để hiểu rõ những cải tiến, chúng ta cần so sánh hai phương pháp:
+## **1. Mục Tiêu**
 
-| Tiêu chí | Phương Pháp Cũ (Project Gốc) | **Phương Pháp Mới (Cải Tiến)** |
-| :--- | :--- | :--- |
-| **Phạm vi dữ liệu** | Lấy 1,000 mẫu đơn giản, **chỉ thuộc 5 lĩnh vực** được chọn trước. | Làm việc trên toàn bộ **2.3 triệu bài báo** để phân tích và tạo ra một bộ dữ liệu con **30,000 mẫu** đại diện cho **17 lĩnh vực chính**. |
-| **Xử lý nhãn** | Lấy nhãn đầu tiên, bỏ qua các nhãn phụ. Coi mỗi bài báo là **đơn nhãn**. | Phân tích cấu trúc `.` và `-` để tự động xác định **nhãn Cha (lĩnh vực lớn)** và **nhãn Con (chủ đề chi tiết)**. Chấp nhận và xử lý bài toán **đa nhãn**. |
-| **Cân bằng dữ liệu** | Lấy 200 mẫu cho mỗi trong 5 lớp (cân bằng đơn giản). | Áp dụng một chiến lược lấy mẫu phức tạp để **cân bằng đồng thời cả về số lượng giữa 17 lớp và cả về tỷ lệ 50/50 giữa các bài báo đơn nhãn và đa nhãn**. |
-| **Kiến trúc mô hình** | Một mô hình duy nhất, phân loại 1 trong 5 lớp. | Xây dựng nền tảng cho **kiến trúc 2 tầng**: Tầng 1 dự đoán các nhãn Cha, Tầng 2 (tương lai) sẽ dự đoán các nhãn Con tương ứng. |
-| **Độ khó bài toán** | **Thấp:** Phân loại đơn nhãn, 5 lớp. | **Rất cao:** Phân loại đa nhãn, 17 lớp, yêu cầu dự đoán đúng một tập hợp các nhãn. |
+Version 3.2 được xây dựng dựa trên những bài học từ V1.0 và V2.2, với một mục tiêu đầy tham vọng:
+1.  **Kết hợp "Tốt nhất của cả hai thế giới":** Tạo ra một vector đặc trưng duy nhất vừa có khả năng **hiểu ngữ nghĩa** (từ FastText) vừa **nhấn mạnh tầm quan trọng của các từ khóa hiếm** (từ TF-IDF).
+2.  **Duy trì hiệu năng cao:** Tiếp tục sử dụng RAPIDS cuML để tăng tốc quá trình tính toán TF-IDF trên GPU.
+3.  **Tối ưu hóa thông minh:** Áp dụng quy trình tinh chỉnh siêu tham số bằng Optuna trên bộ đặc trưng "lai" mới này.
 
-Về cơ bản, chúng ta đã chuyển từ một bài toán "đồ chơi" sang một bài toán gần với thực tế hơn rất nhiều.
+## **2. Kiến Trúc & Phương Pháp Thực Hiện (Chi tiết)**
 
----
+Đây là pipeline hoàn chỉnh của Version 3.2, một kiến trúc phức tạp hơn đáng kể so với các phiên bản trước.
 
-#### 2. Quy Trình Làm Việc Chi Tiết
+1.  **Tiền xử lý văn bản (với spaCy):**
+    -   Mỗi abstract được đưa qua một pipeline tiền xử lý: chuyển thành chữ thường, loại bỏ ký tự đặc biệt, và quan trọng nhất là **lemmatization** (đưa từ về dạng gốc, ví dụ: `studies`, `studying` -> `study`).
+    -   Kết quả là một phiên bản "sạch" của abstract, sẵn sàng cho các bước tiếp theo.
 
-##### Giai đoạn 1: Tạo Cấu Trúc Nhãn Cha-Con
+2.  **Huấn luyện TF-IDF trên GPU (Chỉ để lấy trọng số):**
+    -   Toàn bộ 30,000 abstract đã được xử lý được đưa vào `TfidfVectorizer` của `cuML`.
+    -   Mô hình này được `fit` trên dữ liệu để học và tính toán **trọng số IDF (Inverse Document Frequency)** cho 15,000 từ phổ biến nhất. IDF là một thước đo cho biết một từ hiếm hay phổ biến trong toàn bộ kho văn bản.
+    -   **Lưu ý quan trọng:** Chúng ta **không** sử dụng ma trận TF-IDF mà nó tạo ra. Mục đích duy nhất của bước này là để có được một dictionary `idf_weights` chứa điểm số hiếm của từng từ.
 
-Chúng tôi đã xây dựng một quy trình tự động để phân cấp hơn 2.3 triệu bài báo:
-1.  **Tạo Ứng Cử Viên:** Quét qua 3.8 triệu lượt gán nhãn, trích xuất phần đầu của mỗi nhãn (ví dụ `math.CO` -> `math`) làm "ứng cử viên" nhãn cha.
-2.  **Lựa Chọn Dựa Trên Dữ Liệu:** Đặt ra ngưỡng khách quan: chỉ những ứng cử viên chiếm hơn 0.1% "thị phần" trong tổng số lượt gán nhãn mới được công nhận là Nhãn Cha. Quá trình này đã xác định được **17 lĩnh vực lớn**.
-3.  **Tạo Cột Mới:** Bổ sung hai cột `parent_labels` và `child_labels` vào dataset gốc.
+3.  **Tải mô hình FastText:**
+    -   Mô hình `fasttext-wiki-news-subwords-300` được tải về. Mô hình này chứa các vector 300 chiều đại diện cho ngữ nghĩa của hàng triệu từ.
 
-##### Giai đoạn 2: Tạo Dataset Con Cân Bằng Tối Ưu
+4.  **Tạo Vector Đặc Trưng "Lai" (Cốt lõi của V3.2):**
+    -   Đây là bước đột phá và cũng là trung tâm của thử nghiệm. Với mỗi abstract, chúng tôi thực hiện:
+        a. Tách abstract thành các token (từ).
+        b. Với mỗi token, lấy ra **vector FastText** (300 chiều) và **trọng số IDF** của nó.
+        c. Nhân vector FastText với trọng số IDF. Thao tác này khuếch đại độ lớn (magnitude) của vector đối với các từ hiếm và giảm độ lớn đối với các từ phổ biến.
+        d. Tính **trung bình có trọng số** của tất cả các vector đã được khuếch đại này để tạo ra một vector 300 chiều duy nhất đại diện cho toàn bộ abstract.
+    -   **Kỳ vọng:** Vector cuối cùng sẽ vừa mang thông tin ngữ nghĩa, vừa được "lái" theo hướng của các từ khóa quan trọng nhất.
 
-Từ 2.3 triệu dòng, chúng tôi đã tạo ra một bộ dữ liệu 30,000 mẫu (`arxiv_perfectly_balanced.csv`) với các đặc điểm sau:
-*   **Cân bằng Cấu trúc:** Có chính xác **14,994 (50.0%)** bài báo đơn nhãn và **15,000 (50.0%)** bài báo đa nhãn.
-*   **Cân bằng Lớp:** Sự chênh lệch số lượng mẫu giữa 17 lớp cha đã được giảm thiểu đáng kể, giúp mô hình không bị thiên vị.
+5.  **Tối ưu hóa và Huấn luyện:**
+    -   Vector 300 chiều mới này được sử dụng làm đầu vào cho quy trình Optuna và huấn luyện mô hình phân cấp hai tầng LightGBM, tương tự như các phiên bản trước.
 
-##### Giai đoạn 3: Huấn Luyện và Đánh Giá Mô Hình Tầng 1
+## **3. Kết Quả Thử Nghiệm (Version 3.2)**
 
-Chúng tôi đã xây dựng **Tầng 1** của hệ thống, có nhiệm vụ dự đoán các nhãn cha từ abstract.
-1.  **Mã hóa Văn bản:** Dữ liệu abstract được mã hóa bằng 3 phương pháp để so sánh: `Bag-of-Words (BoW)`, `TF-IDF`, và `Sentence Embeddings (all-MiniLM-L6-v2)`.
-2.  **Huấn luyện:** 5 mô hình Machine Learning hiệu năng cao (`KNN`, `DecisionTree`, `RandomForest`, `XGBoost`, `LightGBM`) đã được huấn luyện. Do tính chất đa nhãn, các mô hình boosting được bọc trong `OneVsRestClassifier`.
-3.  **Đánh giá:** Chúng tôi sử dụng nhiều độ đo, bao gồm `Subset Accuracy` (độ chính xác khắt khe, yêu cầu đoán đúng toàn bộ tập hợp nhãn) và `Comparative Accuracy` (để so sánh tương đối với cách làm cũ).
+### **Bảng So Sánh Hiệu Suất: V1.0 vs V2.2 vs V3.2**
 
----
+| Metric | V1.0 (TF-IDF 5k) | V2.2 (FastText Avg) | **V3.2 (TF-IDF Weighted)** | Phân Tích |
+| :--- | :--- | :--- | :--- | :--- |
+| **F1-Weighted (Tầng 1)** | **0.6483** | 0.6386 | **0.0951** | **↓ 85%** (Sụp đổ) |
+| **F1-Macro (Tầng 1)** | **0.6474** | 0.6359 | **0.0835** | **↓ 87%** (Sụp đổ) |
+| **F1-Weighted (Tầng 2)** | **0.4047** | 0.3732 | **0.0264** | **↓ 93%** (Thất bại hoàn toàn) |
+| **F1-Macro (Tầng 2)** | **0.2543** | 0.2319 | **0.0080** | **↓ 97%** (Thất bại hoàn toàn) |
 
-#### 3. Kết Quả Chi Tiết và Diễn Giải
+## **4. Phân Tích Chuyên Sâu: Tại Sao Kết Quả Lại Tệ Hại Như Vậy?**
 
-Toàn bộ quá trình huấn luyện 5 mô hình trên 3 loại dữ liệu (tổng cộng 15 lần chạy) mất khoảng **1 giờ 7 phút** trên Google Colab.
+Kết quả không chỉ không cải thiện mà còn sụp đổ hoàn toàn. Đây không phải là một sự sụt giảm thông thường mà là dấu hiệu của một **sai lầm cơ bản trong phương pháp luận** khi kết hợp các đặc trưng.
 
-**Bảng xếp hạng kết quả:**
-```
-           Model    Encoding  Comparative Accuracy  Subset Accuracy  F1 Score (Samples)  Jaccard Score (Samples)
-0            KNN  Embeddings                0.5814           0.4059              0.6782                   0.6083
-1        XGBoost  Embeddings                0.4984           0.3296              0.5949                   0.5272
-2       LightGBM         BoW                0.4674           0.3177              0.5727                   0.5077
-...          ...         ...                   ...              ...                 ...                      ...
-```
+**Nguyên nhân chính: Sự Thống Trị của các Từ Siêu Hiếm và Sự "Nhiễu Loạn" Ngữ Nghĩa**
 
-**Phân tích kết quả:**
+1.  **Khuếch Đại Tín Hiệu Quá Mức:** Trọng số IDF có thang đo logarit. Một từ xuất hiện trong 10 tài liệu sẽ có điểm IDF cao hơn rất nhiều so với một từ xuất hiện trong 1,000 tài liệu. Khi chúng ta nhân vector FastText (có độ lớn tương đối đồng đều) với điểm IDF này, vector của các từ **siêu hiếm** (ví dụ: một thuật ngữ rất hẹp, một lỗi chính tả,...) sẽ bị khuếch đại lên gấp 10, 20 lần so với các từ khác.
 
-1.  **Sự Kết Hợp Tốt Nhất:** **KNN** kết hợp với **Sentence Embeddings** cho kết quả vượt trội trên mọi chỉ số. Điều này cho thấy `Embeddings` đã tạo ra một không gian vector giàu ngữ nghĩa, và `KNN` (thuật toán dựa trên khoảng cách) đã tận dụng rất tốt không gian đó để tìm ra các bài báo tương tự.
+2.  **"Pha Loãng" và "Bóp Méo" Ngữ Nghĩa:**
+    -   Hãy tưởng tượng một abstract về "Computer Science" có các từ: `learning` (phổ biến, IDF thấp), `network` (phổ biến, IDF thấp), và một thuật ngữ toán học rất hiếm `Grothendieck-Riemann-Roch` (siêu hiếm, IDF cực cao).
+    -   Trong phương pháp **Vector Trung Bình (V2.2)**, `Grothendieck...` chỉ đóng góp một phần nhỏ.
+    -   Trong phương pháp **TF-IDF Weighted (V3.2)**, vector của `Grothendieck...` sẽ được nhân với một số rất lớn. Vector 300 chiều cuối cùng sẽ gần như chỉ là vector của `Grothendieck...` và bị bóp méo hoàn toàn. Nó đã **mất hết thông tin ngữ nghĩa** của `learning` và `network`.
+    -   Mô hình không còn học về "Khoa học Máy tính" nữa, mà nó đang cố gắng phân loại dựa trên những thuật ngữ dị biệt, nhiễu và không mang tính đại diện cho chủ đề chính.
 
-2.  **So Sánh Với Cách Làm Cũ:**
-    *   `Comparative Accuracy` cao nhất đạt **58.14%**. Con số này có vẻ thấp hơn so với `accuracy` (~88%) của project cũ, nhưng đây là một kết quả **rất tốt**.
-    *   **Lý do:** Mô hình mới đang giải quyết một bài toán khó hơn rất nhiều (17 lớp đa nhãn vs. 5 lớp đơn nhãn). Tỷ lệ đoán mò chỉ là ~5.8%, mô hình của chúng ta làm tốt hơn gấp 10 lần. Việc so sánh trực tiếp là khập khiễng.
+3.  **So sánh với TF-IDF Thuần Túy (V1.0):**
+    -   Trong V1.0, `learning`, `network`, và `Grothendieck` là 3 cột (feature) riêng biệt trong ma trận 15,000 chiều. Mô hình LightGBM đủ thông minh để học rằng `learning` và `network` là những tín hiệu mạnh cho lớp `cs`, trong khi `Grothendieck` có thể là một tín hiệu nhiễu hoặc chỉ quan trọng trong một số trường hợp rất hẹp.
+    -   Trong V3.2, chúng ta đã **ép** cả ba tín hiệu này vào một vector 300 chiều duy nhất một cách sai lầm, khiến tín hiệu nhiễu lấn át hoàn toàn tín hiệu chính **trước khi** mô hình có cơ hội học.
 
-3.  **Hiệu Suất Thực Tế:**
-    *   `Subset Accuracy` đạt **40.59%**, nghĩa là mô hình có khả năng dự đoán đúng hoàn toàn một tập hợp các nhãn (kể cả các nhãn phức tạp như `['cs', 'math']`) trong hơn 40% trường hợp. Đây là một con số rất ấn tượng.
-    *   `F1 Score` và `Jaccard Score` đều cao (lần lượt là **67.8%** và **60.8%**), cho thấy mô hình dự đoán đúng phần lớn các nhãn cho mỗi bài báo, chứng tỏ khả năng nhận diện liên ngành rất tốt.
+## **5. Bài Học Rút Ra và Hướng Đi Tiếp Theo**
 
-**Kết luận:**
-Quy trình tiền xử lý và tạo dataset cân bằng đã thành công. Chúng ta đã xây dựng được một mô hình Tầng 1 mạnh mẽ, có khả năng phân loại đa nhãn hiệu quả, vượt xa khả năng của phương pháp tiếp cận đơn giản ban đầu. Nền tảng này đã sẵn sàng để tiếp tục xây dựng các mô hình Tầng 2 nhằm phân loại chi tiết các nhãn con.
+Thất bại của V3.2 là bài học quý giá nhất từ trước đến nay.
+-   **Bài học:** Việc kết hợp các đặc trưng một cách "ngây thơ" có thể phá hủy thông tin thay vì làm giàu nó. Phải luôn hiểu rõ bản chất và thang đo của từng loại đặc trưng trước khi kết hợp.
+-   **Xác nhận:** TF-IDF vẫn là một baseline cực kỳ mạnh mẽ cho các tác vụ phân loại văn bản dựa trên từ khóa.
 
-### Tóm Tắt Chi Tiết Quy Trình và Kết Quả Dự Án (Xây dựng đầy đủ 2 tầng)
+**Hướng đi cho Version 4.0: Giữ Lại Thông Tin Thay Vì Phá Hủy Nó**
 
-#### 1. Xây Dựng và Chuẩn Bị Dữ Liệu
+Chúng ta sẽ không cố gắng "ép" các loại đặc trưng vào cùng một không gian nữa. Thay vào đó, chúng ta sẽ cho mô hình thấy tất cả chúng.
 
-Quy trình bắt đầu từ bộ dữ liệu gốc hơn 2.2 triệu bài báo, vốn rất lớn và mất cân bằng. Chúng tôi đã thực hiện các bước sau để tạo ra một tập dữ liệu chất lượng cao cho việc huấn luyện:
+-   **Phương pháp:** **Nối Đặc Trưng (Feature Concatenation)**
+    1.  Tạo ma trận TF-IDF 15,000 chiều từ V1.0 (sử dụng GPU để tăng tốc).
+    2.  Tạo ma trận FastText 300 chiều từ V2.2 (dùng vector trung bình đơn giản).
+    3.  **Nối (concatenate)** hai ma trận này lại với nhau theo chiều ngang để tạo ra một ma trận đặc trưng cuối cùng có `15,000 + 300 = 15,300` chiều cho mỗi abstract.
+-   **Lợi ích:**
+    -   **Bảo toàn thông tin:** Mô hình sẽ nhận được cả hai dạng thông tin một cách riêng biệt: 15,000 cột cho tín hiệu từ khóa và 300 cột cho tín hiệu ngữ nghĩa.
+    -   **Tận dụng sức mạnh của LightGBM:** LightGBM và các mô hình cây quyết định khác cực kỳ giỏi trong việc xử lý các không gian đặc trưng có số chiều lớn và tự động chọn ra những đặc trưng quan trọng nhất để phân loại.
 
-1.  **Phân Cấp Nhãn (Cha-Con):**
-    *   **Phương pháp:** Chúng tôi đã phát triển một quy trình tự động để xác định các lĩnh vực khoa học lớn (Nhãn Cha). Bằng cách quét qua 3.8 triệu lượt gán nhãn, chúng tôi trích xuất các tiền tố (prefix) trước dấu `.` hoặc `-` (ví dụ: `math.CO` -> `math`).
-    *   **Lựa chọn:** Chỉ những tiền tố chiếm hơn 0.1% "thị phần" trong tổng số các chủ đề mới được công nhận là Nhãn Cha. Quá trình này đã xác định được **17 Nhãn Cha** chính, tạo ra một cấu trúc phân cấp có ý nghĩa.
+## **6. Kết Luận Chung**
 
-2.  **Tạo Dataset Con Cân Bằng (30,000 mẫu):**
-    *   **Mục tiêu:** Tạo ra một bộ dữ liệu nhỏ hơn, dễ quản lý và **ít thiên vị** nhất có thể.
-    *   **Chiến lược:** Chúng tôi đã áp dụng một phương pháp lấy mẫu hai chiều phức tạp để đảm bảo bộ dữ liệu 30,000 mẫu cuối cùng (`arxiv_perfectly_balanced.csv`) đạt được hai mục tiêu cân bằng quan trọng:
-        *   **Cân bằng Cấu trúc:** Tỷ lệ bài báo **đơn nhãn (50.0%)** và **đa nhãn (50.0%)** được giữ ở mức cân bằng hoàn hảo.
-        *   **Cân bằng Lớp:** Sự chênh lệch về số lượng mẫu giữa 17 lớp cha được giảm thiểu đáng kể, giúp mô hình học một cách công bằng hơn.
+Version 3.2 là một thất bại về mặt metrics nhưng là một thành công lớn về mặt khoa học. Nó đã chỉ ra một cách rõ ràng rằng phương pháp lai "TF-IDF Weighted Embedding" là không phù hợp cho bài toán này. Kết quả này giúp chúng ta loại bỏ một hướng đi sai lầm và củng cố cho một hướng đi mới, hứa hẹn hơn cho V4.0: nối đặc trưng.
 
-#### 2. Kiến Trúc Mô Hình Phân Cấp Hai Tầng
-
-Chúng tôi đã xây dựng và huấn luyện một hệ thống gồm hai tầng:
-
-*   **Tầng 1 (Dự đoán Nhãn Cha):**
-    *   **Nhiệm vụ:** Nhận một `abstract` và dự đoán một hoặc nhiều trong số 17 Nhãn Cha.
-    *   **Công nghệ:** Chúng tôi sử dụng mô hình `LightGBM` (bọc trong `OneVsRestClassifier` để xử lý đa nhãn) và mã hóa văn bản bằng `Sentence Embeddings` (mô hình `E5-base`) để tạo ra các vector ngữ nghĩa chất lượng cao.
-
-*   **Tầng 2 (Dự đoán Nhãn Con):**
-    *   **Nhiệm vụ:** Với mỗi Nhãn Cha được dự đoán từ Tầng 1, một mô hình con chuyên biệt sẽ được kích hoạt để dự đoán các Nhãn Con chi tiết.
-    *   **Công nghệ:** Chúng tôi đã huấn luyện **15 mô hình `LightGBM` riêng biệt**, mỗi mô hình là một "chuyên gia" cho một lĩnh vực lớn (ví dụ: một mô hình cho `math`, một cho `cs`, v.v.).
-
-#### 3. Kết Quả Đánh Giá Hiệu Suất
-
-Sau khi huấn luyện, toàn bộ hệ thống đã được đánh giá trên một tập test gồm 5,999 bài báo.
-
-**Kết quả định lượng:**
-
-*   **Hiệu suất Tầng 1 (Nhãn Cha):**
-    *   `Subset Accuracy`: **0.2275** (Đoán đúng hoàn toàn tập hợp nhãn cha trong 22.7% trường hợp).
-    *   `F1 Score (Samples)`: **0.4880** (Trung bình, mô hình đoán đúng khoảng 49% các nhãn cha cho mỗi bài báo).
-
-*   **Hiệu suất Toàn Hệ Thống (Nhãn Con Cuối Cùng):**
-    *   `F1 Score (Samples)`: **0.2572**
-    *   `Jaccard Score`: **0.2157**
-
-**Diễn giải kết quả và Phân tích tại sao hiệu suất còn thấp:**
-
-Kết quả F1-score cuối cùng là **25.7%** cho thấy đây là một baseline ban đầu và còn nhiều không gian để cải thiện. Nguyên nhân chính của hiệu suất còn khiêm tốn này đến từ sự cộng hưởng của nhiều yếu tố:
-
-1.  **Lỗi Khuếch Đại từ Tầng 1:** Tầng 1 là "cửa ngõ" của hệ thống. Với F1-score chỉ 49%, nó thường xuyên dự đoán sai hoặc bỏ sót các nhãn cha. **Nếu Tầng 1 bỏ sót một nhãn cha, Tầng 2 sẽ không bao giờ có cơ hội để dự đoán các nhãn con tương ứng, gây ra lỗi dây chuyền.** Đây là điểm yếu lớn nhất của hệ thống hiện tại.
-
-2.  **Độ Khó Cố Hữu của Bài Toán:** Việc phân loại chi tiết hàng trăm nhãn con khác nhau, đặc biệt là trong các lĩnh vực có sự chồng chéo lớn về ngôn ngữ (ví dụ: `hep-th` và `math-ph`), là một nhiệm vụ cực kỳ khó khăn.
-
-3.  **Hiệu suất của các Mô hình Con (Tầng 2):** Mỗi mô hình con được huấn luyện trên một tập dữ liệu nhỏ hơn và có thể chưa được tối ưu hóa. Một số mô hình con có thể hoạt động rất kém, kéo hiệu suất chung đi xuống.
-
-#### 4. Phân Tích Ví Dụ Dự Đoán Thực Tế
-
-Để hiểu rõ hơn về hành vi của mô hình, hãy xem xét một vài ví dụ từ tập test:
-
-*   **Ví dụ 1 (Thành công một phần, thất bại ở Tầng 2):**
-    *   **Abstract:** Về "adaptive quantum circuits", "symmetry-breaking order", "gapless, local Hamiltonian".
-    *   **Nhãn thật (Con):** `['cond-mat.stat-mech', 'quant-ph']`
-    *   **Dự đoán Tầng 1:** `['cond-mat', 'quant']` -> **ĐÚNG HOÀN TOÀN!**
-    *   **Dự đoán Tầng 2:** `[]` (trống) -> **SAI!**
-    *   **Phân tích:** Tầng 1 đã hoạt động xuất sắc khi nhận diện đúng cả hai lĩnh vực. Tuy nhiên, các mô hình con của `cond-mat` và `quant` đã không đủ mạnh để xác định các chủ đề chi tiết.
-
-*   **Ví dụ 2 (Thất bại ở Tầng 1 - Bỏ sót):**
-    *   **Abstract:** Về "cellular networks", "full-duplex", "beamforming", "multi-cell network capacity".
-    *   **Nhãn thật (Cha):** `['cs', 'eess', 'math']`
-    *   **Dự đoán Tầng 1:** `['eess']` -> **SAI (thiếu)**. Mô hình chỉ nhận ra được khía cạnh Kỹ thuật Điện (`eess`) mà bỏ qua hoàn toàn khía cạnh Khoa học Máy tính (`cs`) và Toán học (`math`).
-    *   **Phân tích:** Đây là lỗi phổ biến nhất. Do Tầng 1 bỏ sót `cs` và `math`, các mô hình con tương ứng không được kích hoạt, dẫn đến việc các nhãn con `cs.IT`, `cs.NI`, `math.IT` cũng bị bỏ lỡ.
-
-*   **Ví dụ 3 (Thất bại ở Tầng 1 - Nhầm lẫn):**
-    *   **Abstract:** Về "copositivity", "scalar potentials", "Higgs boson", "two Higgs doublet model".
-    *   **Nhãn thật (Cha):** `['hep']`
-    *   **Dự đoán Tầng 1:** `['gr', 'hep', 'patt-sol']` -> **SAI (thừa)**. Mô hình đã đoán đúng `hep` nhưng lại "ảo giác" ra cả Hấp dẫn Lượng tử (`gr`) và một nhãn không liên quan.
-    *   **Phân tích:** Mô hình vẫn còn nhầm lẫn giữa các lĩnh vực có từ vựng tương tự nhau.
-
-**Kết luận chung:**
-Hệ thống phân cấp hai tầng hiện tại đã được xây dựng thành công và cho thấy tiềm năng trong việc xử lý bài toán phức tạp. Tuy nhiên, hiệu suất hiện tại còn hạn chế, chủ yếu do độ chính xác chưa cao của mô hình Tầng 1. Các bước cải thiện trong tương lai nên tập trung vào việc **tối ưu hóa mạnh mẽ mô hình dự đoán nhãn cha** để tạo ra một nền tảng vững chắc hơn cho Tầng 2 hoạt động.
